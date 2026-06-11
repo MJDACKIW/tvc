@@ -1,3 +1,16 @@
+# Python virtual environments and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# PlatformIO build files and IDE data
+.pio/
+.clang_complete
+.gcc-flags.json
+
+# macOS system files
+.DS_Store
 # Byte-compiled / cache
 __pycache__/
 *.py[cod]
