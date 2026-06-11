@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import numpy, matplotlib, scipy; print\\(numpy.__version__, matplotlib.__version__, scipy.__version__\\)\")",
+      "Read(//Users/marcjuliandackiw/Documents/Documents - Marc’s MacBook Pro/Projects/tvc/**)",
+      "Bash(python3 -m venv venv)",
+      "Bash(./venv/bin/pip install *)",
+      "Bash(./venv/bin/python -c \"import numpy, matplotlib, scipy; print\\('numpy', numpy.__version__, '| matplotlib', matplotlib.__version__, '| scipy', scipy.__version__\\)\")",
+      "Bash(time ../venv/bin/python tvc_paper_figures.py)",
+      "Bash(../venv/bin/python tvc_paper_figures.py)"
+    ]
+  }
+}
