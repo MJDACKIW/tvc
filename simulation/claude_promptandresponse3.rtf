@@ -1,0 +1,741 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2869
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 HelveticaNeue;\f1\fnil\fcharset0 .AppleSystemUIFontMonospaced-Regular;\f2\fnil\fcharset0 .SFNS-Regular_wdth_opsz110000_GRAD_wght1F40000;
+}
+{\colortbl;\red255\green255\blue255;\red219\green218\blue209;\red255\green255\blue255;\red144\green144\blue144;
+\red29\green29\blue29;\red96\green96\blue96;\red233\green233\blue233;\red149\green149\blue149;\red251\green11\blue69;
+\red48\green211\blue59;\red255\green255\blue255;\red24\green24\blue23;\red149\green148\blue137;\red255\green255\blue255;
+\red255\green255\blue255;}
+{\*\expandedcolortbl;;\cssrgb\c88627\c88235\c85490;\cssrgb\c100000\c100000\c100000\c7843;\cssrgb\c63137\c63137\c63137;
+\cssrgb\c14902\c14902\c14902;\cssrgb\c45098\c45098\c45098;\cssrgb\c92941\c92941\c92941;\cssrgb\c65098\c65098\c65098;\cssrgb\c100000\c17255\c33725;
+\cssrgb\c19608\c84314\c29412;\cssrgb\c100000\c100000\c100000\c3922;\cssrgb\c12157\c12157\c11765;\cssrgb\c65098\c64706\c60784;\cssrgb\c100000\c100000\c100000\c70196;
+\cssrgb\c100000\c100000\c100000\c47843;}
+{\*\listtable{\list\listtemplateid1\listhybrid{\listlevel\levelnfc23\levelnfcn23\leveljc0\leveljcn0\levelfollow0\levelstartat0\levelspace360\levelindent0{\*\levelmarker \{disc\}}{\leveltext\leveltemplateid1\'01\uc0\u8226 ;}{\levelnumbers;}\fi-360\li720\lin720 }{\listname ;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 IMPORTANT!!!!!!!!!: MAKE SURE TO PUT ANY FILES YOU CREATE INTO THE 'simulation' folder. \
+\
+PROMPT 2 \'97 IAE Simulation Codebase (Research Scholars Project)\
+Paste this entire prompt into a fresh Claude Code session.\
+Goal: build the complete 12-file modular Python simulation used to compare\
+sim IAE vs hardware IAE from the 2-DOF static test stand.\
+You are building a 12-file modular Python codebase for a TVC (Thrust Vector Control) model rocket simulation. The central scientific metric is IAE (Integral of Absolute Error): comparing simulated attitude error against hardware attitude error from a 2-DOF test stand live fire. Build all 12 files. Run main.py at the end to confirm the full pipeline executes.\
+FILE LIST\
+config.py, motor.py, dynamics.py, kalman.py, control.py, flight_computer.py, simulation.py, analysis.py, jacobian.py, sensitivity.py, figures.py, main.py\
+PHYSICAL PARAMETERS (in config.py \'97 every other file imports from here)\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf6 \strokec6 # Motor\cf7 \strokec7 \
+BURN_TIME       \cf8 \strokec8 =\cf9 \strokec9  2.44\cf6 \strokec6         # s\cf7 \strokec7 \
+PLOT_END        \cf8 \strokec8 =\cf9 \strokec9  3.5\cf6 \strokec6          # s\cf7 \strokec7 \
+\
+\cf6 \strokec6 # NAR certified E12-4 thrust data (time_s, thrust_N)\cf7 \strokec7 \
+THRUST_TIME \cf8 \strokec8 = [\cf9 \strokec9 0.000\cf8 \strokec8 ,\cf9 \strokec9  0.050\cf8 \strokec8 ,\cf9 \strokec9  0.100\cf8 \strokec8 ,\cf9 \strokec9  0.150\cf8 \strokec8 ,\cf9 \strokec9  0.200\cf8 \strokec8 ,\cf9 \strokec9  0.287\cf8 \strokec8 ,\cf9 \strokec9  0.300\cf8 \strokec8 ,\cf9 \strokec9  0.350\cf8 \strokec8 ,\cf9 \strokec9  0.400\cf8 \strokec8 ,\cf7 \strokec7 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9                0.450\cf8 \strokec8 ,\cf9 \strokec9  0.500\cf8 \strokec8 ,\cf9 \strokec9  0.600\cf8 \strokec8 ,\cf9 \strokec9  0.700\cf8 \strokec8 ,\cf9 \strokec9  0.800\cf8 \strokec8 ,\cf9 \strokec9  0.900\cf8 \strokec8 ,\cf9 \strokec9  1.000\cf8 \strokec8 ,\cf9 \strokec9  1.200\cf8 \strokec8 ,\cf9 \strokec9  1.400\cf8 \strokec8 ,\cf7 \strokec7 \
+\cf9 \strokec9                1.600\cf8 \strokec8 ,\cf9 \strokec9  1.800\cf8 \strokec8 ,\cf9 \strokec9  2.000\cf8 \strokec8 ,\cf9 \strokec9  2.100\cf8 \strokec8 ,\cf9 \strokec9  2.200\cf8 \strokec8 ,\cf9 \strokec9  2.300\cf8 \strokec8 ,\cf9 \strokec9  2.380\cf8 \strokec8 ,\cf9 \strokec9  2.440\cf8 \strokec8 ]\cf7 \strokec7 \
+THRUST_N    \cf8 \strokec8 = [\cf9 \strokec9 0.0\cf8 \strokec8 ,\cf9 \strokec9   5.1\cf8 \strokec8 ,\cf9 \strokec9   10.0\cf8 \strokec8 ,\cf9 \strokec9  24.1\cf8 \strokec8 ,\cf9 \strokec9  31.5\cf8 \strokec8 ,\cf9 \strokec9  33.0\cf8 \strokec8 ,\cf9 \strokec9  30.0\cf8 \strokec8 ,\cf9 \strokec9  17.1\cf8 \strokec8 ,\cf9 \strokec9  14.6\cf8 \strokec8 ,\cf7 \strokec7 \
+\cf9 \strokec9                13.2\cf8 \strokec8 ,\cf9 \strokec9  11.7\cf8 \strokec8 ,\cf9 \strokec9  11.2\cf8 \strokec8 ,\cf9 \strokec9  11.2\cf8 \strokec8 ,\cf9 \strokec9  10.5\cf8 \strokec8 ,\cf9 \strokec9  10.1\cf8 \strokec8 ,\cf9 \strokec9   9.8\cf8 \strokec8 ,\cf9 \strokec9   9.8\cf8 \strokec8 ,\cf9 \strokec9   9.7\cf8 \strokec8 ,\cf7 \strokec7 \
+\cf9 \strokec9                 9.7\cf8 \strokec8 ,\cf9 \strokec9   9.7\cf8 \strokec8 ,\cf9 \strokec9   9.8\cf8 \strokec8 ,\cf9 \strokec9   9.8\cf8 \strokec8 ,\cf9 \strokec9   9.7\cf8 \strokec8 ,\cf9 \strokec9   9.5\cf8 \strokec8 ,\cf9 \strokec9    6.1\cf8 \strokec8 ,\cf9 \strokec9   0.0\cf8 \strokec8 ]\cf7 \strokec7 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf6 \strokec6 # Vehicle\cf7 \strokec7 \
+ROCKET_MASS     \cf8 \strokec8 =\cf9 \strokec9  0.661\cf6 \strokec6        # kg (dry 0.600 + propellant 0.0612)\cf7 \strokec7 \
+MOI             \cf8 \strokec8 =\cf9 \strokec9  0.0231\cf6 \strokec6       # kg\'b7m\'b2\cf7 \strokec7 \
+MOMENT_ARM      \cf8 \strokec8 =\cf9 \strokec9  0.288\cf6 \strokec6        # m (CoM-to-nozzle distance)\cf7 \strokec7 \
+CP_OFFSET       \cf8 \strokec8 =\cf9 \strokec9  0.173\cf6 \strokec6        # m (CP-CG offset = MOMENT_ARM * 0.6)\cf7 \strokec7 \
+AIR_DENSITY     \cf8 \strokec8 =\cf9 \strokec9  1.225\cf6 \strokec6        # kg/m\'b3\cf7 \strokec7 \
+ROCKET_RADIUS   \cf8 \strokec8 =\cf9 \strokec9  0.022\cf6 \strokec6        # m\cf7 \strokec7 \
+AERO_DAMP_COEFF \cf8 \strokec8 =\cf9 \strokec9  0.5\cf7 \strokec7 \
+\
+\cf6 \strokec6 # PID gains\cf7 \strokec7 \
+KP              \cf8 \strokec8 =\cf9 \strokec9  8.5\cf7 \strokec7 \
+KI              \cf8 \strokec8 =\cf9 \strokec9  0.0\cf6 \strokec6          # Pure PD (zero integrator)\cf7 \strokec7 \
+KD              \cf8 \strokec8 =\cf9 \strokec9  1.2\cf7 \strokec7 \
+CONTROL_HZ      \cf8 \strokec8 =\cf9 \strokec9  150\cf7 \strokec7 \
+DT_SIM          \cf8 \strokec8 =\cf9 \strokec9  0.001\cf6 \strokec6        # s\cf7 \strokec7 \
+\
+\cf6 \strokec6 # Servo / actuator\cf7 \strokec7 \
+GIMBAL_LIMIT    \cf8 \strokec8 =\cf9 \strokec9  10.0\cf6 \strokec6         # degrees hard stop\cf7 \strokec7 \
+SERVO_RATE_LIM  \cf8 \strokec8 =\cf9 \strokec9  300.0\cf6 \strokec6        # deg/s\cf7 \strokec7 \
+\
+\cf6 \strokec6 # Kalman\cf7 \strokec7 \
+Q_ANGLE         \cf8 \strokec8 =\cf9 \strokec9  0.001\cf7 \strokec7 \
+Q_RATE          \cf8 \strokec8 =\cf9 \strokec9  0.003\cf7 \strokec7 \
+R_MEASURE       \cf8 \strokec8 =\cf9 \strokec9  0.03\cf7 \strokec7 \
+GYRO_NOISE_STD  \cf8 \strokec8 =\cf9 \strokec9  0.5\cf6 \strokec6          # deg/s\cf7 \strokec7 \
+ACCEL_NOISE_STD \cf8 \strokec8 =\cf9 \strokec9  2.5\cf6 \strokec6          # degrees (NOT g-units)\cf7 \strokec7 \
+GYRO_DRIFT_RATE \cf8 \strokec8 =\cf9 \strokec9  0.8\cf6 \strokec6          # deg/s post-burnout\cf7 \strokec7 \
+\
+\cf6 \strokec6 # Sensitivity sweep ranges\cf7 \strokec7 \
+SENSITIVITY_PARAMS \cf8 \strokec8 = \{\cf7 \strokec7 \
+\pard\pardeftab720\partightenfactor0
+\cf10 \strokec10     'KP'\cf8 \strokec8 :           \{\cf10 \strokec10 'nominal'\cf8 \strokec8 :\cf9 \strokec9  8.5\cf8 \strokec8 ,\cf10 \strokec10    'range'\cf8 \strokec8 : (\cf9 \strokec9 5.0\cf8 \strokec8 ,\cf9 \strokec9  15.0\cf8 \strokec8 ),\cf10 \strokec10   'n'\cf8 \strokec8 :\cf9 \strokec9  10\cf8 \strokec8 \},\cf7 \strokec7 \
+\cf10 \strokec10     'KD'\cf8 \strokec8 :           \{\cf10 \strokec10 'nominal'\cf8 \strokec8 :\cf9 \strokec9  1.2\cf8 \strokec8 ,\cf10 \strokec10    'range'\cf8 \strokec8 : (\cf9 \strokec9 0.5\cf8 \strokec8 ,\cf9 \strokec9   3.0\cf8 \strokec8 ),\cf10 \strokec10   'n'\cf8 \strokec8 :\cf9 \strokec9  10\cf8 \strokec8 \},\cf7 \strokec7 \
+\cf10 \strokec10     'THRUST_SCALE'\cf8 \strokec8 : \{\cf10 \strokec10 'nominal'\cf8 \strokec8 :\cf9 \strokec9  1.0\cf8 \strokec8 ,\cf10 \strokec10    'range'\cf8 \strokec8 : (\cf9 \strokec9 0.7\cf8 \strokec8 ,\cf9 \strokec9   1.3\cf8 \strokec8 ),\cf10 \strokec10   'n'\cf8 \strokec8 :\cf9 \strokec9  10\cf8 \strokec8 \},\cf7 \strokec7 \
+\cf10 \strokec10     'MOMENT_ARM'\cf8 \strokec8 :   \{\cf10 \strokec10 'nominal'\cf8 \strokec8 :\cf9 \strokec9  0.288\cf8 \strokec8 ,\cf10 \strokec10  'range'\cf8 \strokec8 : (\cf9 \strokec9 0.23\cf8 \strokec8 ,\cf9 \strokec9  0.35\cf8 \strokec8 ),\cf10 \strokec10  'n'\cf8 \strokec8 :\cf9 \strokec9  10\cf8 \strokec8 \},\cf7 \strokec7 \
+\cf10 \strokec10     'GIMBAL_LIMIT'\cf8 \strokec8 : \{\cf10 \strokec10 'nominal'\cf8 \strokec8 :\cf9 \strokec9  10.0\cf8 \strokec8 ,\cf10 \strokec10   'range'\cf8 \strokec8 : (\cf9 \strokec9 6.0\cf8 \strokec8 ,\cf9 \strokec9  14.0\cf8 \strokec8 ),\cf10 \strokec10   'n'\cf8 \strokec8 :\cf9 \strokec9  10\cf8 \strokec8 \},\cf7 \strokec7 \
+\cf10 \strokec10     'GYRO_BIAS'\cf8 \strokec8 :    \{\cf10 \strokec10 'nominal'\cf8 \strokec8 :\cf9 \strokec9  0.0\cf8 \strokec8 ,\cf10 \strokec10    'range'\cf8 \strokec8 : (-\cf9 \strokec9 2.0\cf8 \strokec8 ,\cf9 \strokec9  2.0\cf8 \strokec8 ),\cf10 \strokec10   'n'\cf8 \strokec8 :\cf9 \strokec9  10\cf8 \strokec8 \},\cf7 \strokec7 \
+\pard\pardeftab720\partightenfactor0
+\cf8 \strokec8 \}\cf7 \strokec7 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf6 \strokec6 # IAE phase boundaries\cf7 \strokec7 \
+IAE_IGNITION_END  \cf8 \strokec8 =\cf9 \strokec9  0.3\cf6 \strokec6        # s\cf7 \strokec7 \
+IAE_PEAK_END      \cf8 \strokec8 =\cf9 \strokec9  0.6\cf6 \strokec6        # s\cf7 \strokec7 \
+\cf6 \strokec6 # tail-off is IAE_PEAK_END to BURN_TIME\cf7 \strokec7 \
+\
+\cf6 \strokec6 # Figure output directory\cf7 \strokec7 \
+FIG_DIR \cf8 \strokec8 =\cf10 \strokec10  'figures_iae'\cf7 \strokec7 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 FILE SPECIFICATIONS\
+motor.py\
+Single function: 
+\f1\fs26 \cb11 get_thrust(t, thrust_scale=1.0)
+\f0\fs28 \cb3 \
+\
+* numpy.interp on config.THRUST_TIME, config.THRUST_N, multiplied by thrust_scale\
+* Returns 0.0 for t > config.BURN_TIME\
+* Imports: numpy, config\
+kalman.py\
+Class 
+\f1\fs26 \cb11 KalmanFilter
+\f0\fs28 \cb3 :\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 __init__(self):\
+    self.state = [0.0, 0.0]   # [angle_deg, gyro_bias_dps]\
+    self.P = [[1,0],[0,1]]\
+    self.rng = np.random.default_rng()  # for noise injection during simulation\
+\
+update(self, gyro_rate_dps, accel_angle_deg, dt):\
+    # Standard 2-state discrete Kalman\
+    # F = [[1, -dt], [0, 1]]\
+    # B = [dt, 0]\
+    # H = [1, 0]\
+    # Q = diag([Q_ANGLE, Q_RATE])\
+    # R = R_MEASURE\
+    # Predict: state_pred = F @ state + B * gyro_rate_dps\
+    # P_pred = F @ P @ F.T + Q\
+    # Update: y = accel_angle_deg - H @ state_pred\
+    # S = H @ P_pred @ H.T + R\
+    # K = P_pred @ H.T / S\
+    # state = state_pred + K * y\
+    # P = (I - K @ H) @ P_pred\
+    Returns (estimated_angle_deg, estimated_rate_dps)\
+\
+reset(self, angle=0.0):\
+    Re-initializes state and P\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 IMPORTANT: KalmanFilter does NOT generate noise internally. Noisy sensor readings are passed IN from simulation.py. This is the critical bug fix \'97 never re-draw noise inside this class.\
+dynamics.py\
+Class 
+\f1\fs26 \cb11 RocketDynamics
+\f0\fs28 \cb3 : State: theta (pitch deg), theta_dot (pitch rate deg/s), psi (yaw deg), psi_dot (yaw rate deg/s)\
+\pard\pardeftab720\partightenfactor0
+
+\f1\fs26 \cf2 \cb11 __init__(self, theta0=0.0, rate0=0.0, psi0=0.0, psi_rate0=0.0)
+\f0\fs28 \cb3 \
+
+\f1\fs26 \cb11 step(self, t, gimbal_pitch_deg, gimbal_yaw_deg, wind_torque_pitch=0.0, wind_torque_yaw=0.0, thrust_scale=1.0)
+\f0\fs28 \cb3 : Computes torques per axis and advances state via RK4 with config.DT_SIM.\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 Per axis (pitch and yaw independently):\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 F_T = motor.get_thrust(t, thrust_scale)\
+tau_tvc = F_T * MOMENT_ARM * sin(radians(gimbal_angle))\
+\
+# Aerodynamic damping (MUST be included \'97 critical physics fix)\
+v_approx = sqrt(max(2 * F_T / ROCKET_MASS, 0))\
+q_dyn = 0.5 * AIR_DENSITY * v_approx**2\
+A_cs = pi * ROCKET_RADIUS**2\
+tau_aero = -AERO_DAMP_COEFF * radians(angular_rate) * q_dyn * A_cs * CP_OFFSET\
+\
+# Wind torque (CP_OFFSET as moment arm \'97 critical physics fix)\
+tau_wind = wind_torque * CP_OFFSET\
+\
+alpha = degrees((tau_tvc + tau_aero + tau_wind) / MOI)\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 RK4: k1 through k4 on angular_rate and alpha.\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 Returns: (theta, theta_dot, psi, psi_dot) after the step.\
+control.py\
+Class 
+\f1\fs26 \cb11 PIDController
+\f0\fs28 \cb3 : One instance per axis (pitch, yaw).\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 __init__(self, kp=KP, ki=KI, kd=KD):\
+    self.kp, self.ki, self.kd = kp, ki, kd\
+    self.integral = 0.0\
+    self.prev_error = 0.0\
+    self.prev_output = 0.0\
+\
+update(self, error_deg, dt):\
+    p = self.kp * error_deg\
+    self.integral += self.ki * error_deg * dt\
+    self.integral = clip(self.integral, -GIMBAL_LIMIT, GIMBAL_LIMIT)  # anti-windup\
+    d = self.kd * (error_deg - self.prev_error) / dt\
+    raw = p + self.integral + d\
+    \
+    # Servo rate limiting\
+    max_delta = SERVO_RATE_LIM * dt\
+    output = clip(raw, self.prev_output - max_delta, self.prev_output + max_delta)\
+    \
+    # Hard stop\
+    output = clip(output, -GIMBAL_LIMIT, GIMBAL_LIMIT)\
+    \
+    self.prev_error = error_deg\
+    self.prev_output = output\
+    return output\
+\
+reset(self):\
+    Re-initializes all state to 0\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 flight_computer.py\
+Class 
+\f1\fs26 \cb11 FlightComputer
+\f0\fs28 \cb3 : State machine with states: PAD_IDLE, POWERED_FLIGHT, BURNOUT (use string enum or IntEnum)\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 __init__(self):\
+    self.state = 'PAD_IDLE'\
+    self.launch_time = None\
+    self.burnout_time = None\
+    self._coast_sample_count = 0\
+    self._COAST_SAMPLES_REQUIRED = 5\
+\
+update(self, t, accel_magnitude_g):\
+    """Call every control cycle. accel_magnitude_g = total accelerometer magnitude in g."""\
+    if self.state == 'PAD_IDLE':\
+        if accel_magnitude_g > 2.0:   # launch detection threshold\
+            self.state = 'POWERED_FLIGHT'\
+            self.launch_time = t\
+    \
+    elif self.state == 'POWERED_FLIGHT':\
+        if accel_magnitude_g < 0.3:\
+            self._coast_sample_count += 1\
+        else:\
+            self._coast_sample_count = 0\
+        if self._coast_sample_count >= self._COAST_SAMPLES_REQUIRED:\
+            self.state = 'BURNOUT'\
+            self.burnout_time = t\
+    \
+    # BURNOUT: terminal state, no further transitions\
+\
+@property\
+def control_active(self):\
+    return self.state == 'POWERED_FLIGHT'\
+\
+reset(self):\
+    Re-initializes all state\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 NOTE: In simulation context, accel_magnitude_g is derived from thrust / (ROCKET_MASS * 9.81) adjusted for gravity. The flight computer gates whether control.py gets called.\
+simulation.py\
+Function 
+\f1\fs26 \cb11 run_simulation(theta0=5.0, rate0=0.0, psi0=0.0, psi_rate0=0.0, open_loop=False, disturbance=None, wind_mag=0.0, thrust_scale=1.0, kp_override=None, kd_override=None, gimbal_limit_override=None, gyro_bias=0.0, seed=None)
+\f0\fs28 \cb3 :\
+Instantiates: RocketDynamics, KalmanFilter (x2, one per axis), PIDController (x2), FlightComputer, and a numpy RNG with the given seed.\
+Main loop from t=0 to PLOT_END in steps of DT_SIM:\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 control_step_counter += 1\
+physics_steps_per_control = round(1.0 / (CONTROL_HZ * DT_SIM))  # = 7 at 150Hz, 1ms\
+\
+# 1. Advance dynamics\
+theta, theta_dot, psi, psi_dot = dynamics.step(t, gimbal_pitch, gimbal_yaw,\
+    wind_torque_pitch=disturbance_torque_pitch, thrust_scale=thrust_scale)\
+\
+# 2. Generate sensor readings (add noise to true state)\
+gyro_pitch_reading = theta_dot + rng.normal(0, GYRO_NOISE_STD) + gyro_bias\
+accel_pitch_reading = theta + rng.normal(0, ACCEL_NOISE_STD)\
+# same for yaw\
+# Post-burnout: accumulate GYRO_DRIFT_RATE * DT_SIM to gyro readings\
+\
+# 3. Kalman update\
+k_pitch_angle, k_pitch_rate = kalman_pitch.update(gyro_pitch_reading, accel_pitch_reading, DT_SIM)\
+# same for yaw\
+\
+# 4. FlightComputer update\
+accel_g = motor.get_thrust(t, thrust_scale) / (ROCKET_MASS * 9.81)\
+flight_computer.update(t, accel_g)\
+\
+# 5. Control update (every physics_steps_per_control steps)\
+if control_step_counter >= physics_steps_per_control:\
+    control_step_counter = 0\
+    if flight_computer.control_active and not open_loop:\
+        gimbal_pitch = pid_pitch.update(-k_pitch_angle, DT_SIM * physics_steps_per_control)\
+        gimbal_yaw   = pid_yaw.update(-k_psi_angle,    DT_SIM * physics_steps_per_control)\
+    else:\
+        gimbal_pitch = 0.0\
+        gimbal_yaw   = 0.0\
+\
+# 6. Log everything\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 Log arrays: time, true_theta, true_theta_dot, true_psi, true_psi_dot, kalman_theta, kalman_psi, gimbal_pitch_cmd, gimbal_yaw_cmd, accel_pitch_reading, gyro_pitch_reading, accel_psi_reading, gyro_psi_reading, thrust_at_t, flight_state_int\
+Return dict with all arrays as numpy arrays plus scalar metadata: burn_start_idx, burn_end_idx, IAE_sim (computed over burn window on true_theta + true_psi).\
+Also compute and return:\
+\
+* iae_phase_ignition: IAE from 0 to 0.3s\
+* iae_phase_peak: IAE from 0.3s to 0.6s\
+* iae_phase_tailoff: IAE from 0.6s to BURN_TIME\
+IAE formula: np.trapz(np.abs(angle_array[burn_mask]), time_array[burn_mask]) Apply same formula to pitch + yaw summed, or return separately \'97 return both.\
+analysis.py\
+Function 
+\f1\fs26 \cb11 compare_iae(sim_data, hardware_csv_path=None)
+\f0\fs28 \cb3 :\
+If hardware_csv_path is None: Print simulation IAE values (phase-segmented) and return sim dict only.\
+If hardware_csv_path is provided: Load CSV, compute hardware IAE using same trapz formula over burn window, compute \uc0\u916 IAE = hardware_IAE - sim_IAE per phase. Print a formatted comparison table: 
+\f1\fs26 \cb11 Phase Sim IAE HW IAE \uc0\u916 IAE Notes Ignition x.xx x.xx +x.xx ... Peak thrust x.xx x.xx +x.xx ... Tail-off x.xx x.xx +x.xx aero damping absent on stand Total x.xx x.xx +x.xx 
+\f0\fs28 \cb3 Return dict with all IAE values.\
+Function 
+\f1\fs26 \cb11 print_stability_summary(eigenvalues)
+\f0\fs28 \cb3 : Prints formatted eigenvalue report (call after jacobian.py computes them).\
+jacobian.py\
+Function 
+\f1\fs26 \cb11 compute_jacobian(thrust=None)
+\f0\fs28 \cb3 : If thrust is None, use mean thrust (11.12 N) \'97 the nominal operating point.\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 Linearize rotational dynamics around equilibrium (theta=0, theta_dot=0, gimbal=0).\
+The 2\'d72 system matrix A for state [theta, theta_dot]:\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 # From Newton-Euler rotational equation:\
+# theta_ddot = (F_T * MOMENT_ARM * delta - AERO_DAMP_COEFF * q_dyn * A_cs * CP_OFFSET * theta_dot) / MOI\
+# Linearized: theta_ddot = (F_T * MOMENT_ARM / MOI) * delta - (C_damp / MOI) * theta_dot\
+# With PD control: delta = -KP * theta - KD * theta_dot\
+# Substitute: \
+# theta_dot  = theta_dot\
+# theta_ddot = -(F_T * MOMENT_ARM * KP / MOI) * theta \
+#              - (F_T * MOMENT_ARM * KD / MOI + C_damp_effective / MOI) * theta_dot\
+\
+a12 = 1.0\
+a21 = -(thrust * MOMENT_ARM * KP) / MOI\
+a22 = -(thrust * MOMENT_ARM * KD + aero_damp_effective) / MOI\
+# where aero_damp_effective = AERO_DAMP_COEFF * q_dyn * A_cs * CP_OFFSET at operating point\
+\
+A = [[0, a12], [a21, a22]]\
+eigenvalues = np.linalg.eigvals(A)\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 \
+Returns dict:\
+- 'A': the 2x2 matrix\
+- 'eigenvalues': complex array\
+- 'lambda1': slow pole (attitude control, ~-2.475)\
+- 'lambda2': fast pole (servo dynamics, ~-1059)\
+- 'stable': bool (all eigenvalues have negative real part)\
+- 'time_constant_slow': abs(1/real(lambda1))\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 sensitivity.py\
+Function 
+\f1\fs26 \cb11 run_sensitivity(n_trials_per_param=10)
+\f0\fs28 \cb3 :\
+For each parameter in config.SENSITIVITY_PARAMS: Sweep the parameter across its range. For each value, run simulation.run_simulation() with that parameter overridden. Record total IAE.\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 Compute normalized sensitivity elasticity:\
+S = (delta_IAE / IAE_nominal) / (delta_param / param_nominal)\
+\
+Store as bar magnitude for tornado plot.\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 Returns dict: \{param_name: sensitivity_value\}\
+IMPORTANT: GYRO_BIAS must be evaluated around the NOMINAL operating point (bias=0). Do not evaluate it at a non-zero bias baseline \'97 this was a bug in the original.\
+figures.py\
+Takes the data dict from simulation.py and renders all IAE-codebase figures. Call: 
+\f1\fs26 \cb11 generate_all_figures(sim_data, sensitivity_data=None, eigenvalues=None, hardware_data=None)
+\f0\fs28 \cb3 \
+Figure list:\
+fig_iae_01_baseline.png \'97 Same as paper fig02 but for IAE codebase: 3-panel pitch angle / rate / gimbal, burn window shaded. Include IAE annotation in title or subtitle: "Sim IAE = \{value:.3f\} deg\'b7s"\
+fig_iae_02_phase_iae.png \'97 Phase-segmented IAE bar chart: 3 bars: Ignition (0\'960.3s), Peak (0.3\'960.6s), Tail-off (0.6\'962.44s) If hardware data provided: grouped bars sim vs hardware per phase. Y: "IAE (deg\'b7s)", title: "Phase-Segmented IAE: Simulation vs Hardware"\
+fig_iae_03_sensitivity_tornado.png \'97 Tornado plot: Horizontal bar chart, parameters sorted by |sensitivity|. Bars extend left/right from center (0). Fix: ensure xlim accommodates the longest bar (KI expected ~774 normalized \'97 but since KI=0 here, largest will likely be KP or gimbal limit). Label each bar with its value; adjust xlim to max_val * 1.2 so labels don't clip.\
+fig_iae_04_eigenvalue.png \'97 Eigenvalue plot: Complex plane. Plot lambda1 (~-2.475 + 0j) and lambda2 (~-1059 + 0j) as X markers. Shade left half-plane green (stable), right half-plane red (unstable). Vertical dashed line at real=0. Use two subplots or two insets: one zoomed for lambda1, one for lambda2 (scales differ by 400x). Annotate each: "\uc0\u955 \u8321  \u8776  -2.475 (attitude pole)" and "\u955 \u8322  \u8776  -1059 (servo pole)" Title: "Closed-Loop Eigenvalue Analysis \'97 Linearized TVC System"\
+fig_iae_05_kalman.png \'97 Kalman performance (same as paper fig08 but using logged data)\
+fig_iae_06_hardware_overlay.png \'97 (Only generated if hardware_data dict is provided) Overlay of sim pitch angle vs hardware pitch angle on same axes. X: time, Y: angle (deg), two different colors. Title: "Simulation vs Hardware: Attitude Comparison (2-DOF Test Stand)"\
+Save all to config.FIG_DIR ('figures_iae/'), dpi=150.\
+main.py\
+CLI entry with argparse, 
+\f1\fs26 \cb11 --mode
+\f0\fs28 \cb3  flag:\
+\
+* 
+\f1\fs26 \cb11 simulate
+\f0\fs28 \cb3  (default): run single simulation, generate IAE figures\
+* 
+\f1\fs26 \cb11 sensitivity
+\f0\fs28 \cb3 : run sensitivity sweep, generate tornado plot\
+* 
+\f1\fs26 \cb11 hardware <csv_path>
+\f0\fs28 \cb3 : load hardware CSV, run comparison, generate overlay figure\
+* 
+\f1\fs26 \cb11 full
+\f0\fs28 \cb3 : run all of the above\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf4 \cb5 \strokec4 \
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 python main.py --mode simulate\
+python main.py --mode sensitivity\
+python main.py --mode hardware path/to/hardware_log.csv\
+python main.py --mode full\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 Sequence for 
+\f1\fs26 \cb11 simulate
+\f0\fs28 \cb3  mode:\
+\
+1. Print "Running baseline simulation..."\
+2. sim_data = simulation.run_simulation(theta0=5.0, seed=42)\
+3. analysis.print_stability_summary(jacobian.compute_jacobian()['eigenvalues'])\
+4. analysis.compare_iae(sim_data)\
+5. figures.generate_all_figures(sim_data)\
+6. Print "Done. Figures saved to figures_iae/"\
+CRITICAL PHYSICS RULES (same as prompt 1 \'97 all must be implemented)\
+\
+1. AERO DAMPING: always included in dynamics.py, tau_aero_damp formula as specified.\
+2. WIND TORQUE: uses CP_OFFSET as moment arm.\
+3. ACCEL NOISE: in degrees (ACCEL_NOISE_STD = 2.5), never g-units \'d7 rad conversion.\
+4. KALMAN LOGGED DATA: figures.py must use sim_data['accel_pitch_reading'] \'97 never re-draw.\
+5. GYRO_BIAS SENSITIVITY: evaluated around nominal (bias=0), not a non-zero baseline.\
+6. OPEN LOOP: gimbal = 0 always, flight_computer still runs, but PID bypassed.\
+BUILD ORDER FOR CLAUDE CODE\
+Build and test in this order:\
+\
+1. config.py (no dependencies)\
+2. motor.py \uc0\u8594  test: 
+\f1\fs26 \cb11 python -c "from motor import get_thrust; print(get_thrust(0.287))"
+\f0\fs28 \cb3 \
+3. kalman.py \uc0\u8594  test update function manually\
+4. dynamics.py \uc0\u8594  test single step\
+5. control.py \uc0\u8594  test update\
+6. flight_computer.py \uc0\u8594  test state transitions\
+7. simulation.py \uc0\u8594  test: 
+\f1\fs26 \cb11 run_simulation(theta0=5.0, seed=42)
+\f0\fs28 \cb3 , print IAE\
+8. analysis.py, jacobian.py\
+9. sensitivity.py (slowest \'97 runs many simulations)\
+10. figures.py \uc0\u8594  generate all figures\
+11. main.py \uc0\u8594  test 
+\f1\fs26 \cb11 python main.py --mode simulate
+\f0\fs28 \cb3 \
+Confirm: all 12 files exist, 
+\f1\fs26 \cb11 python main.py --mode simulate
+\f0\fs28 \cb3  runs without errors.\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 I'll build the 12-file IAE simulation in the\'a0
+\f1\fs26 \cb3 simulation/
+\f0\fs28 \cb12 \'a0folder. First, let me check what's already there and what Python environment is available.\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Ran\'a02 commands\cb1 \
+\
+\cb12 Recalled\'a0a memory\cb1 \
+\
+\cb12 Created\'a06 files\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 \strokec2 First six files are in place. Now the core simulation loop and analysis modules:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Created\'a04 files\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 \strokec2 Now the two remaining files, figures.py and main.py:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Created\'a02 files,\'a0ran\'a02 commands\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 \strokec2 All unit tests pass with hand-checked values (the dynamics step matches the analytic torque calculation, and the PID rate limiter clips exactly as specified). Now the full simulation:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Ran\'a03 commands\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 \strokec2 simulate mode works end to end. Now the sensitivity sweep, plus the hardware comparison path using a synthetic test CSV in /tmp (so the repo's data/ stays clean):\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Ran\'a04 commands,\'a0read\'a02 files\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \strokec2 \
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 tvc-iae-spec-audit\cb1 \
+\pard\pardeftab720\partightenfactor0
+
+\fs24 \cf14 \cb12 \strokec14 Workflow\cb1 \
+\cb12 10\cf15 \strokec15 \'a0Agents\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf15 \cb12 8h 26m 40s\cb1 \
+\pard\pardeftab720\partightenfactor0
+
+\fs28 \cf2 \cb9 \strokec2 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 While the audit runs, let me verify reproducibility and the remaining figures, and exercise the headerless-CSV path:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Ran\cb1 \
+\cb12 Verify reproducibility, open-loop, disturbance, headerless CSV\cb1 \
+\cb12 Stopped\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb3 \strokec2 Continue task, please.\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 Continuing: running the determinism and CSV edge-case checks while the audit workflow runs in the background.\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Ran\cb1 \
+\cb12 Verify determinism, open-loop, disturbance, and headerless CSV paths\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 \strokec2 All edge paths pass. Let me visually check the remaining four figures while the audit completes:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf13 \cb12 \strokec13 Read\'a04 files\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 \strokec2 All six figures render correctly: the tornado is sorted by |sensitivity| with labeled bars and headroom, the Kalman figure plots the logged accelerometer readings (RMSE 0.80 deg), the phase chart groups sim vs hardware bars, and the overlay shades the burn window.\cb1 \
+\cb12 Status so far:\cb1 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls1\ilvl0
+\f2 \cf2 \cb12 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 All 12 files built
+\f0 \'a0in\'a0
+\f1\fs26 \cb3 simulation/
+\f0\fs28 \cb12 \'a0and every CLI mode runs clean:\'a0
+\f1\fs26 \cb3 --mode simulate
+\f0\fs28 \cb12 ,\'a0
+\f1\fs26 \cb3 --mode sensitivity
+\f0\fs28 \cb12 \'a0(7s),\'a0
+\f1\fs26 \cb3 --mode hardware <csv>
+\f0\fs28 \cb12 , and\'a0
+\f1\fs26 \cb3 --mode full
+\f0\fs28 \cb12 .\cb1 \
+\ls1\ilvl0
+\f2 \cb12 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Verified behaviors
+\f0 : same seed reproduces IAE exactly (31.3197 deg\'b7s), different seeds differ, open-loop holds gimbal at 0 while the flight computer still cycles PAD_IDLE to POWERED_FLIGHT to BURNOUT, the disturbance path executes, and both headered and headerless hardware CSVs load (yaw column optional).\cb1 \
+\ls1\ilvl0
+\f2 \cb12 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	\uc0\u8226 	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Hand-checked numerics
+\f0 : the dynamics RK4 step matches the analytic torque calculation, the PID rate limiter clips exactly per spec, and the Kalman converges to a constant input.\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb12 The adversarial spec-compliance workflow (10 audit dimensions, each finding independently verified by a skeptic) is still running in the background; I'll report its findings and apply any confirmed fixes when it completes.\cb1 \
+}

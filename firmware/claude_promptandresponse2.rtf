@@ -1,0 +1,870 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2869
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 HelveticaNeue;\f1\fnil\fcharset0 .AppleSystemUIFontMonospaced-Regular;\f2\fnil\fcharset0 .SFNS-Regular_wdth_opsz110000_GRAD_wght1F40000;
+}
+{\colortbl;\red255\green255\blue255;\red219\green218\blue209;\red255\green255\blue255;\red255\green255\blue255;
+\red144\green144\blue144;\red29\green29\blue29;\red96\green96\blue96;\red233\green233\blue233;\red246\green110\blue36;
+\red149\green149\blue149;\red251\green11\blue69;\red48\green211\blue59;\red16\green131\blue255;\red167\green125\blue255;
+\red24\green24\blue23;\red149\green148\blue137;}
+{\*\expandedcolortbl;;\cssrgb\c88627\c88235\c85490;\cssrgb\c100000\c100000\c100000\c7843;\cssrgb\c100000\c100000\c100000\c3922;
+\cssrgb\c63137\c63137\c63137;\cssrgb\c14902\c14902\c14902;\cssrgb\c45098\c45098\c45098;\cssrgb\c92941\c92941\c92941;\cssrgb\c98039\c51373\c18039;
+\cssrgb\c65098\c65098\c65098;\cssrgb\c100000\c17255\c33725;\cssrgb\c19608\c84314\c29412;\cssrgb\c0\c60000\c100000;\cssrgb\c71765\c58824\c100000;
+\cssrgb\c12157\c12157\c11765;\cssrgb\c65098\c64706\c60784;}
+{\*\listtable{\list\listtemplateid1\listhybrid{\listlevel\levelnfc0\levelnfcn0\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{decimal\}}{\leveltext\leveltemplateid1\'01\'00;}{\levelnumbers\'01;}\fi-360\li720\lin720 }{\listname ;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 VERY IMPORTANT!!!!!: PLACE ANY FILES CREATED INTO THE "firmware" FOLDER ONLY.\
+\
+PROMPT 3 \'97 Teensy 4.1 Firmware + Post-Processing Script\
+Paste this entire prompt into a fresh Claude Code session.\
+Goal: produce tvc_2dof.ino (Arduino/Teensyduino firmware) and\
+compute_hardware_iae.py (Python post-processing script).\
+You are writing embedded firmware for a Teensy 4.1 microcontroller that controls a 2-DOF (pitch + yaw) Thrust Vector Control system during a static test stand live fire with an Estes E12-4 motor. You are also writing the Python post-processing script that ingests the SD card log and computes hardware IAE for comparison against simulation.\
+The control law (PID gains, Kalman parameters, loop rate, gimbal limits) MUST be numerically identical to the Python simulation. Eliminating control-law discrepancies as a variable is the entire point \'97 only physics differences (no aerodynamic damping on a static stand, motor-to-motor variance) should explain \uc0\u916 IAE.\
+DELIVERABLES\
+\
+1. 
+\f1\fs26 \cb4 tvc_2dof.ino
+\f0\fs28 \cb3  \'97 complete Teensy 4.1 Arduino sketch\
+2. 
+\f1\fs26 \cb4 compute_hardware_iae.py
+\f0\fs28 \cb3  \'97 Python post-processing script\
+HARDWARE SPEC\
+\
+* MCU: Teensy 4.1\
+* IMU: MPU-6050, I2C at 400kHz, address 0x68\
+   * SDA: Pin 18, SCL: Pin 19\
+* Servos: SG90 (pulse range 500\'962500 \'b5s)\
+   * Library: PWMServo.h (Teensy-native \'97 do NOT use standard Servo.h)\
+   * Servo pins: SERVO_PITCH_PIN and SERVO_YAW_PIN \'97 define as configurable constants at top of file; leave as TODO comments for user to fill in (example: 
+\f1\fs26 \cb4 const int SERVO_PITCH_PIN = 9; // TODO: set your pin
+\f0\fs28 \cb3 )\
+* SD card: Teensy 4.1 built-in SD slot, use 
+\f1\fs26 \cb4 BUILTIN_SDCARD
+\f0\fs28 \cb3  as chip-select\
+   * Library: SD.h\
+* Power: Servos powered from regulated 5V (NOT Teensy's onboard 5V pin)\
+* Serial: 115200 baud for debug output\
+CONTROL PARAMETERS (must exactly match Python simulation config.py)\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // PID gains \'97 MUST match config.py\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 const float\cf8 \strokec8  KP \cf10 \strokec10 =\cf11 \strokec11  8.5f\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  KI \cf10 \strokec10 =\cf11 \strokec11  0.0f\cf10 \strokec10 ;\cf7 \strokec7    // Pure PD\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  KD \cf10 \strokec10 =\cf11 \strokec11  1.2f\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // Kalman noise parameters \'97 MUST match config.py\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 const float\cf8 \strokec8  Q_ANGLE   \cf10 \strokec10 =\cf11 \strokec11  0.001f\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  Q_RATE    \cf10 \strokec10 =\cf11 \strokec11  0.003f\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  R_MEASURE \cf10 \strokec10 =\cf11 \strokec11  0.03f\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // Actuator limits \'97 MUST match config.py\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 const float\cf8 \strokec8  GIMBAL_LIMIT_DEG  \cf10 \strokec10 =\cf11 \strokec11  10.0f\cf10 \strokec10 ;\cf7 \strokec7    // \'b110\'b0 hard stop\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  SERVO_RATE_LIM    \cf10 \strokec10 =\cf11 \strokec11  300.0f\cf10 \strokec10 ;\cf7 \strokec7   // deg/s\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // Control loop\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 const int\cf8 \strokec8    CONTROL_HZ        \cf10 \strokec10 =\cf11 \strokec11  150\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 const int\cf8 \strokec8    LOOP_INTERVAL_US  \cf10 \strokec10 =\cf11 \strokec11  6667\cf10 \strokec10 ;\cf7 \strokec7     // microseconds (1e6 / 150)\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // Servo geometry\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 const int\cf8 \strokec8    SERVO_CENTER_US   \cf10 \strokec10 =\cf11 \strokec11  1500\cf10 \strokec10 ;\cf7 \strokec7     // \'b5s = 90\'b0 neutral\cf8 \strokec8 \
+\cf9 \strokec9 const int\cf8 \strokec8    SERVO_MIN_US      \cf10 \strokec10 =\cf11 \strokec11  500\cf10 \strokec10 ;\cf7 \strokec7      // \'b5s\cf8 \strokec8 \
+\cf9 \strokec9 const int\cf8 \strokec8    SERVO_MAX_US      \cf10 \strokec10 =\cf11 \strokec11  2500\cf10 \strokec10 ;\cf7 \strokec7     // \'b5s\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  DEG_PER_US        \cf10 \strokec10 =\cf11 \strokec11  10.0f\cf10 \strokec10  /\cf11 \strokec11  500.0f\cf10 \strokec10 ;\cf7 \strokec7   // 10\'b0 per 500\'b5s half-range\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // Launch/burnout detection\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 const float\cf8 \strokec8  LAUNCH_ACCEL_G    \cf10 \strokec10 =\cf11 \strokec11  2.0f\cf10 \strokec10 ;\cf7 \strokec7    // above this = motor lit\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  BURNOUT_ACCEL_G   \cf10 \strokec10 =\cf11 \strokec11  0.3f\cf10 \strokec10 ;\cf7 \strokec7    // below this for N samples = burnout\cf8 \strokec8 \
+\cf9 \strokec9 const int\cf8 \strokec8    BURNOUT_SAMPLES   \cf10 \strokec10 =\cf11 \strokec11  5\cf10 \strokec10 ;\cf7 \strokec7       // consecutive samples required\cf8 \strokec8 \
+\cf9 \strokec9 const float\cf8 \strokec8  BURN_TIME_MAX_S   \cf10 \strokec10 =\cf11 \strokec11  3.0f\cf10 \strokec10 ;\cf7 \strokec7    // safety timeout\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 FILE: tvc_2dof.ino\
+Includes and pin definitions\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf10 \strokec10 #\cf9 \strokec9 include\cf12 \strokec12  <Wire.h>\cf8 \strokec8 \
+\cf10 \strokec10 #\cf9 \strokec9 include\cf12 \strokec12  <PWMServo.h>\cf8 \strokec8 \
+\cf10 \strokec10 #\cf9 \strokec9 include\cf12 \strokec12  <SD.h>\cf8 \strokec8 \
+\cf10 \strokec10 #\cf9 \strokec9 include\cf12 \strokec12  <math.h>\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // TODO: Set your servo pins before flashing\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 const int\cf8 \strokec8  SERVO_PITCH_PIN \cf10 \strokec10 = -\cf11 \strokec11 1\cf10 \strokec10 ;\cf7 \strokec7   // TODO: e.g. 9\cf8 \strokec8 \
+\cf9 \strokec9 const int\cf8 \strokec8  SERVO_YAW_PIN   \cf10 \strokec10 = -\cf11 \strokec11 1\cf10 \strokec10 ;\cf7 \strokec7   // TODO: e.g. 10\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf10 \strokec10 #\cf9 \strokec9 define\cf13 \strokec13  MPU_ADDR\cf11 \strokec11       0x68\cf8 \strokec8 \
+\cf10 \strokec10 #\cf9 \strokec9 define\cf13 \strokec13  SD_CS\cf8 \strokec8          BUILTIN_SDCARD\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 Structs\
+KalmanAxis struct (one per axis):\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 struct\cf14 \strokec14  KalmanAxis\cf10 \strokec10  \{\cf8 \strokec8 \
+\cf9 \strokec9   float\cf8 \strokec8  angle\cf10 \strokec10 ;\cf7 \strokec7        // estimated angle (deg)\cf8 \strokec8 \
+\cf9 \strokec9   float\cf8 \strokec8  bias\cf10 \strokec10 ;\cf7 \strokec7         // estimated gyro bias (deg/s)\cf8 \strokec8 \
+\cf9 \strokec9   float\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 2\cf10 \strokec10 ][\cf11 \strokec11 2\cf10 \strokec10 ];\cf7 \strokec7      // error covariance\cf8 \strokec8 \
+\
+\cf9 \strokec9   void\cf13 \strokec13  init\cf10 \strokec10 () \{\cf8 \strokec8 \
+    angle \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8  bias \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+    P\cf10 \strokec10 [\cf11 \strokec11 0\cf10 \strokec10 ][\cf11 \strokec11 0\cf10 \strokec10 ]=\cf11 \strokec11 1\cf10 \strokec10 ;\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 0\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ]=\cf11 \strokec11 0\cf10 \strokec10 ;\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 0\cf10 \strokec10 ]=\cf11 \strokec11 0\cf10 \strokec10 ;\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ]=\cf11 \strokec11 1\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf10 \strokec10   \}\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9   float\cf13 \strokec13  update\cf10 \strokec10 (\cf9 \strokec9 float\cf8 \strokec8  gyro_rate_dps\cf10 \strokec10 ,\cf9 \strokec9  float\cf8 \strokec8  accel_angle_deg\cf10 \strokec10 ,\cf9 \strokec9  float\cf8 \strokec8  dt\cf10 \strokec10 ) \{\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7     // Predict\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9     float\cf8 \strokec8  angle_pred \cf10 \strokec10 =\cf8 \strokec8  angle \cf10 \strokec10 + (\cf8 \strokec8 gyro_rate_dps \cf10 \strokec10 -\cf8 \strokec8  bias\cf10 \strokec10 ) *\cf8 \strokec8  dt\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  P00 \cf10 \strokec10 =\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 0\cf10 \strokec10 ][\cf11 \strokec11 0\cf10 \strokec10 ] -\cf8 \strokec8  dt\cf10 \strokec10 *(\cf8 \strokec8 P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 0\cf10 \strokec10 ]+\cf8 \strokec8 P\cf10 \strokec10 [\cf11 \strokec11 0\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ]) +\cf8 \strokec8  dt\cf10 \strokec10 *\cf8 \strokec8 dt\cf10 \strokec10 *\cf8 \strokec8 P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ] +\cf8 \strokec8  Q_ANGLE\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  P01 \cf10 \strokec10 =\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 0\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ] -\cf8 \strokec8  dt\cf10 \strokec10 *\cf8 \strokec8 P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ];\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  P10 \cf10 \strokec10 =\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 0\cf10 \strokec10 ] -\cf8 \strokec8  dt\cf10 \strokec10 *\cf8 \strokec8 P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ];\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  P11 \cf10 \strokec10 =\cf8 \strokec8  P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ] +\cf8 \strokec8  Q_RATE\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7     // Update\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9     float\cf8 \strokec8  S \cf10 \strokec10 =\cf8 \strokec8  P00 \cf10 \strokec10 +\cf8 \strokec8  R_MEASURE\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  K0 \cf10 \strokec10 =\cf8 \strokec8  P00 \cf10 \strokec10 /\cf8 \strokec8  S\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  K1 \cf10 \strokec10 =\cf8 \strokec8  P10 \cf10 \strokec10 /\cf8 \strokec8  S\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  y \cf10 \strokec10 =\cf8 \strokec8  accel_angle_deg \cf10 \strokec10 -\cf8 \strokec8  angle_pred\cf10 \strokec10 ;\cf8 \strokec8 \
+    angle \cf10 \strokec10 =\cf8 \strokec8  angle_pred \cf10 \strokec10 +\cf8 \strokec8  K0 \cf10 \strokec10 *\cf8 \strokec8  y\cf10 \strokec10 ;\cf8 \strokec8 \
+    bias  \cf10 \strokec10 =\cf8 \strokec8  bias       \cf10 \strokec10 +\cf8 \strokec8  K1 \cf10 \strokec10 *\cf8 \strokec8  y\cf10 \strokec10 ;\cf7 \strokec7    // Note: bias stays, not updated as part of angle\cf8 \strokec8 \
+    P\cf10 \strokec10 [\cf11 \strokec11 0\cf10 \strokec10 ][\cf11 \strokec11 0\cf10 \strokec10 ] = (\cf11 \strokec11 1\cf10 \strokec10  -\cf8 \strokec8  K0\cf10 \strokec10 ) *\cf8 \strokec8  P00\cf10 \strokec10 ;\cf8 \strokec8 \
+    P\cf10 \strokec10 [\cf11 \strokec11 0\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ] = (\cf11 \strokec11 1\cf10 \strokec10  -\cf8 \strokec8  K0\cf10 \strokec10 ) *\cf8 \strokec8  P01\cf10 \strokec10 ;\cf8 \strokec8 \
+    P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 0\cf10 \strokec10 ] =\cf8 \strokec8  P10 \cf10 \strokec10 -\cf8 \strokec8  K1 \cf10 \strokec10 *\cf8 \strokec8  P00\cf10 \strokec10 ;\cf8 \strokec8 \
+    P\cf10 \strokec10 [\cf11 \strokec11 1\cf10 \strokec10 ][\cf11 \strokec11 1\cf10 \strokec10 ] =\cf8 \strokec8  P11 \cf10 \strokec10 -\cf8 \strokec8  K1 \cf10 \strokec10 *\cf8 \strokec8  P10\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     return\cf8 \strokec8  angle\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf10 \strokec10   \}\cf8 \strokec8 \
+\cf10 \strokec10 \};\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 (Implement as scalar operations \'97 no matrix library needed for 2-state system)\
+PIDAxis struct (one per axis):\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 struct\cf14 \strokec14  PIDAxis\cf10 \strokec10  \{\cf8 \strokec8 \
+\cf9 \strokec9   float\cf8 \strokec8  integral\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9   float\cf8 \strokec8  prev_error\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9   float\cf8 \strokec8  prev_output\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\cf9 \strokec9   void\cf13 \strokec13  init\cf10 \strokec10 () \{\cf8 \strokec8  integral\cf10 \strokec10 =\cf11 \strokec11 0\cf10 \strokec10 ;\cf8 \strokec8  prev_error\cf10 \strokec10 =\cf11 \strokec11 0\cf10 \strokec10 ;\cf8 \strokec8  prev_output\cf10 \strokec10 =\cf11 \strokec11 0\cf10 \strokec10 ; \}\cf8 \strokec8 \
+\
+\cf9 \strokec9   float\cf13 \strokec13  update\cf10 \strokec10 (\cf9 \strokec9 float\cf8 \strokec8  error\cf10 \strokec10 ,\cf9 \strokec9  float\cf8 \strokec8  dt\cf10 \strokec10 ) \{\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  p \cf10 \strokec10 =\cf8 \strokec8  KP \cf10 \strokec10 *\cf8 \strokec8  error\cf10 \strokec10 ;\cf8 \strokec8 \
+    integral \cf10 \strokec10 +=\cf8 \strokec8  KI \cf10 \strokec10 *\cf8 \strokec8  error \cf10 \strokec10 *\cf8 \strokec8  dt\cf10 \strokec10 ;\cf8 \strokec8 \
+    integral \cf10 \strokec10 =\cf13 \strokec13  constrain\cf10 \strokec10 (\cf8 \strokec8 integral\cf10 \strokec10 , -\cf8 \strokec8 GIMBAL_LIMIT_DEG\cf10 \strokec10 ,\cf8 \strokec8  GIMBAL_LIMIT_DEG\cf10 \strokec10 );\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  d \cf10 \strokec10 = (\cf8 \strokec8 dt \cf10 \strokec10 >\cf11 \strokec11  0\cf10 \strokec10 ) ?\cf8 \strokec8  KD \cf10 \strokec10 * (\cf8 \strokec8 error \cf10 \strokec10 -\cf8 \strokec8  prev_error\cf10 \strokec10 ) /\cf8 \strokec8  dt \cf10 \strokec10 :\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  raw \cf10 \strokec10 =\cf8 \strokec8  p \cf10 \strokec10 +\cf8 \strokec8  integral \cf10 \strokec10 +\cf8 \strokec8  d\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7     // Servo rate limiting\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9     float\cf8 \strokec8  max_delta \cf10 \strokec10 =\cf8 \strokec8  SERVO_RATE_LIM \cf10 \strokec10 *\cf8 \strokec8  dt\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9     float\cf8 \strokec8  output \cf10 \strokec10 =\cf13 \strokec13  constrain\cf10 \strokec10 (\cf8 \strokec8 raw\cf10 \strokec10 ,\cf8 \strokec8  prev_output \cf10 \strokec10 -\cf8 \strokec8  max_delta\cf10 \strokec10 ,\cf8 \strokec8  prev_output \cf10 \strokec10 +\cf8 \strokec8  max_delta\cf10 \strokec10 );\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7     // Hard stop\cf8 \strokec8 \
+    output \cf10 \strokec10 =\cf13 \strokec13  constrain\cf10 \strokec10 (\cf8 \strokec8 output\cf10 \strokec10 , -\cf8 \strokec8 GIMBAL_LIMIT_DEG\cf10 \strokec10 ,\cf8 \strokec8  GIMBAL_LIMIT_DEG\cf10 \strokec10 );\cf8 \strokec8 \
+\
+    prev_error \cf10 \strokec10 =\cf8 \strokec8  error\cf10 \strokec10 ;\cf8 \strokec8 \
+    prev_output \cf10 \strokec10 =\cf8 \strokec8  output\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9     return\cf8 \strokec8  output\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf10 \strokec10   \}\cf8 \strokec8 \
+\cf10 \strokec10 \};\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 FlightState enum:\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 enum\cf14 \strokec14  FlightState\cf10 \strokec10  \{\cf8 \strokec8  PAD_IDLE\cf10 \strokec10 ,\cf8 \strokec8  POWERED_FLIGHT\cf10 \strokec10 ,\cf8 \strokec8  BURNOUT \cf10 \strokec10 \};\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 Global variables\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf8 \strokec8 KalmanAxis kalman_pitch\cf10 \strokec10 ,\cf8 \strokec8  kalman_yaw\cf10 \strokec10 ;\cf8 \strokec8 \
+PIDAxis    pid_pitch\cf10 \strokec10 ,\cf8 \strokec8  pid_yaw\cf10 \strokec10 ;\cf8 \strokec8 \
+PWMServo   servo_pitch\cf10 \strokec10 ,\cf8 \strokec8  servo_yaw\cf10 \strokec10 ;\cf8 \strokec8 \
+FlightState flight_state \cf10 \strokec10 =\cf8 \strokec8  PAD_IDLE\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+IntervalTimer control_timer\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 volatile bool\cf8 \strokec8  control_flag \cf10 \strokec10 =\cf11 \strokec11  false\cf10 \strokec10 ;\cf7 \strokec7    // set by timer ISR, consumed in loop()\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // MPU-6050 raw data\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 float\cf8 \strokec8  gyro_pitch_dps\cf10 \strokec10 ,\cf8 \strokec8  gyro_yaw_dps\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 float\cf8 \strokec8  accel_pitch_deg\cf10 \strokec10 ,\cf8 \strokec8  accel_yaw_deg\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 float\cf8 \strokec8  accel_mag_g\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // Gimbal commands (degrees, +/- relative to center)\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 float\cf8 \strokec8  gimbal_pitch_deg \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 float\cf8 \strokec8  gimbal_yaw_deg   \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // Flight timing\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 uint32_t\cf8 \strokec8  launch_time_ms \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 uint32_t\cf8 \strokec8  burnout_time_ms \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 int\cf8 \strokec8  burnout_sample_count \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // SD logging\cf8 \strokec8 \
+File log_file\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 bool\cf8 \strokec8  sd_ok \cf10 \strokec10 =\cf11 \strokec11  false\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 char\cf8 \strokec8  log_filename\cf10 \strokec10 [\cf11 \strokec11 16\cf10 \strokec10 ] =\cf12 \strokec12  "flight01.csv"\cf10 \strokec10 ;\cf8 \strokec8 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 // IAE accumulation (computed on-board)\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 float\cf8 \strokec8  iae_pitch \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 float\cf8 \strokec8  iae_yaw   \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\cf9 \strokec9 float\cf8 \strokec8  last_control_time_s \cf10 \strokec10 =\cf11 \strokec11  0\cf10 \strokec10 ;\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 MPU-6050 functions\
+\pard\pardeftab720\partightenfactor0
+
+\f1\fs26 \cf2 \cb4 mpu_init()
+\f0\fs28 \cb3 :\
+\
+* Wire.begin()\
+* Wire.setClock(400000)\
+* Wake MPU from sleep (write 0 to PWR_MGMT_1 register 0x6B)\
+* Set gyro range: \'b1500 deg/s (register 0x1B, value 0x08)\
+* Set accel range: \'b14g (register 0x1C, value 0x08)\
+* Delay 100ms\
+
+\f1\fs26 \cb4 mpu_read()
+\f0\fs28 \cb3 :\
+\
+* Read 14 bytes starting at register 0x3B (accel XYZ, temp, gyro XYZ)\
+* Combine high/low bytes into int16_t\
+* Gyro: divide by 65.5 to get deg/s (\'b1500 dps range sensitivity)\
+* Accel: divide by 8192.0 to get g (\'b14g range sensitivity)\
+* Assign to:\
+   * gyro_pitch_dps = gyro_x (or whichever axis is pitch in your mount)\
+   * gyro_yaw_dps = gyro_y\
+   * accel_pitch_deg = atan2(accel_x, accel_z) * 180.0 / PI (tilt angle from accel)\
+   * accel_yaw_deg = atan2(accel_y, accel_z) * 180.0 / PI\
+   * accel_mag_g = sqrt(accel_x\'b2 + accel_y\'b2 + accel_z\'b2)\
+* Note: Add comment "// TODO: verify axis mapping matches your IMU mounting orientation"\
+Servo write helper\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9 void\cf13 \strokec13  write_servo_deg\cf10 \strokec10 (\cf14 \strokec14 PWMServo\cf9 \strokec9 &\cf8 \strokec8  servo\cf10 \strokec10 ,\cf9 \strokec9  float\cf8 \strokec8  deflection_deg\cf10 \strokec10 ) \{\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7   // deflection_deg is relative to center, range -GIMBAL_LIMIT to +GIMBAL_LIMIT\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf9 \strokec9   int\cf8 \strokec8  pulse_us \cf10 \strokec10 =\cf8 \strokec8  SERVO_CENTER_US \cf10 \strokec10 + (\cf9 \strokec9 int\cf10 \strokec10 )(\cf8 \strokec8 deflection_deg \cf10 \strokec10 /\cf8 \strokec8  DEG_PER_US\cf10 \strokec10 );\cf8 \strokec8 \
+  pulse_us \cf10 \strokec10 =\cf13 \strokec13  constrain\cf10 \strokec10 (\cf8 \strokec8 pulse_us\cf10 \strokec10 ,\cf8 \strokec8  SERVO_MIN_US\cf10 \strokec10 ,\cf8 \strokec8  SERVO_MAX_US\cf10 \strokec10 );\cf8 \strokec8 \
+  servo\cf10 \strokec10 .\cf13 \strokec13 writeMicroseconds\cf10 \strokec10 (\cf8 \strokec8 pulse_us\cf10 \strokec10 );\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf10 \strokec10 \}\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 SD logging\
+\pard\pardeftab720\partightenfactor0
+
+\f1\fs26 \cf2 \cb4 sd_init()
+\f0\fs28 \cb3 :\
+\
+* SD.begin(SD_CS)\
+* Find next available filename (flight01.csv, flight02.csv, etc.)\
+* Open file and write CSV header:\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\pard\pardeftab720\partightenfactor0
+\cf8 \strokec8 timestamp_ms,accel_pitch_deg,accel_yaw_deg,gyro_pitch_dps,gyro_yaw_dps,accel_mag_g,kalman_pitch_deg,kalman_yaw_deg,gimbal_pitch_cmd_deg,gimbal_yaw_cmd_deg,flight_state,iae_pitch,iae_yaw\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb4 \strokec2 sd_log(uint32_t t_ms)
+\f0\fs28 \cb3 : Write one CSV row with all current values. Buffer writes \'97 only call file.flush() every 50 rows to avoid SD write latency disrupting the control loop (flush happens in loop(), not in the ISR or control path).\
+setup()\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf8 \strokec8 Serial.begin(115200);\
+mpu_init();\
+sd_init();\
+\
+kalman_pitch.init(); kalman_yaw.init();\
+pid_pitch.init();    pid_yaw.init();\
+\
+// Attach servos (only if pins are set)\
+if (SERVO_PITCH_PIN >= 0) servo_pitch.attach(SERVO_PITCH_PIN, SERVO_MIN_US, SERVO_MAX_US);\
+if (SERVO_YAW_PIN   >= 0) servo_yaw.attach(SERVO_YAW_PIN,   SERVO_MIN_US, SERVO_MAX_US);\
+\
+// Center servos\
+write_servo_deg(servo_pitch, 0);\
+write_servo_deg(servo_yaw,   0);\
+\
+// Start control timer \'97 sets flag, does NOT run control in ISR\
+control_timer.begin([]\{ control_flag = true; \}, LOOP_INTERVAL_US);\
+\
+Serial.println("TVC ready. Waiting for launch...");\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 loop()\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf8 \strokec8 if (!control_flag) return;\
+control_flag = false;\
+\
+uint32_t now_ms = millis();\
+float dt = LOOP_INTERVAL_US / 1e6f;  // 0.006667 s\
+\
+// 1. Read IMU\
+mpu_read();\
+\
+// 2. Kalman update\
+float est_pitch = kalman_pitch.update(gyro_pitch_dps, accel_pitch_deg, dt);\
+float est_yaw   = kalman_yaw.update(gyro_yaw_dps,   accel_yaw_deg,   dt);\
+\
+// 3. State machine\
+switch(flight_state) \{\
+  case PAD_IDLE:\
+    if (accel_mag_g > LAUNCH_ACCEL_G) \{\
+      flight_state = POWERED_FLIGHT;\
+      launch_time_ms = now_ms;\
+      Serial.println("LAUNCH DETECTED");\
+    \}\
+    break;\
+\
+  case POWERED_FLIGHT:\
+    if (accel_mag_g < BURNOUT_ACCEL_G) \{\
+      burnout_sample_count++;\
+      if (burnout_sample_count >= BURNOUT_SAMPLES) \{\
+        flight_state = BURNOUT;\
+        burnout_time_ms = now_ms;\
+        gimbal_pitch_deg = 0;\
+        gimbal_yaw_deg   = 0;\
+        write_servo_deg(servo_pitch, 0);\
+        write_servo_deg(servo_yaw,   0);\
+        Serial.print("BURNOUT at ");\
+        Serial.print((now_ms - launch_time_ms) / 1000.0f, 3);\
+        Serial.print("s  |  IAE pitch=");\
+        Serial.print(iae_pitch, 4);\
+        Serial.print(" yaw=");\
+        Serial.println(iae_yaw, 4);\
+      \}\
+    \} else \{\
+      burnout_sample_count = 0;\
+    \}\
+    \
+    // Safety timeout\
+    if ((now_ms - launch_time_ms) > (uint32_t)(BURN_TIME_MAX_S * 1000)) \{\
+      flight_state = BURNOUT;\
+    \}\
+    break;\
+\
+  case BURNOUT:\
+    // Do nothing \'97 log only\
+    break;\
+\}\
+\
+// 4. PID control (only during powered flight)\
+if (flight_state == POWERED_FLIGHT) \{\
+  gimbal_pitch_deg = pid_pitch.update(-est_pitch, dt);\
+  gimbal_yaw_deg   = pid_yaw.update(-est_yaw,   dt);\
+  \
+  write_servo_deg(servo_pitch, gimbal_pitch_deg);\
+  write_servo_deg(servo_yaw,   gimbal_yaw_deg);\
+  \
+  // Accumulate IAE\
+  iae_pitch += fabsf(est_pitch) * dt;\
+  iae_yaw   += fabsf(est_yaw)   * dt;\
+\}\
+\
+// 5. Log to SD\
+if (sd_ok) \{\
+  sd_log(now_ms);\
+\}\
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 SD flush management\
+In loop(), after control logic: if row_count % 50 == 0, call log_file.flush(). This prevents data loss without blocking the control path on every write.\
+At program end (or never \'97 rocket doesn't land in a recoverable way on test stand):\
+On BURNOUT detection, flush and close file immediately after printing final IAE.\
+FILE: compute_hardware_iae.py\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\
+\pard\pardeftab720\partightenfactor0
+\cf7 \strokec7 #!/usr/bin/env python3\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+\cf12 \strokec12 """\cf8 \strokec8 \
+\cf12 \strokec12 compute_hardware_iae.py\cf8 \strokec8 \
+\cf12 \strokec12 Ingests SD card CSV log from tvc_2dof.ino and computes hardware IAE\cf8 \strokec8 \
+\cf12 \strokec12 for comparison against simulation IAE from analysis.py\cf8 \strokec8 \
+\
+\cf12 \strokec12 Usage:\cf8 \strokec8 \
+\cf12 \strokec12     python compute_hardware_iae.py <path_to_csv>\cf8 \strokec8 \
+\cf12 \strokec12     python compute_hardware_iae.py flight01.csv\cf8 \strokec8 \
+\cf12 \strokec12     python compute_hardware_iae.py flight01.csv --sim-iae 0.342\cf8 \strokec8 \
+\cf12 \strokec12 """\cf8 \strokec8 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb3 \strokec2 Implement these functions:\
+\pard\pardeftab720\partightenfactor0
+
+\f1\fs26 \cf2 \cb4 load_log(csv_path)
+\f0\fs28 \cb3 :\
+\
+* Read CSV with pandas (or numpy if pandas unavailable)\
+* Return dataframe with columns as logged\
+* Print: num rows, duration, detected launch time, detected burnout time\
+
+\f1\fs26 \cb4 detect_burn_window(df)
+\f0\fs28 \cb3 :\
+\
+* Find launch: first row where flight_state == 1 (POWERED_FLIGHT)\
+* Find burnout: first row where flight_state == 2 (BURNOUT)\
+* Return (launch_idx, burnout_idx, burn_duration_s)\
+
+\f1\fs26 \cb4 compute_iae(df, launch_idx, burnout_idx)
+\f0\fs28 \cb3 :\
+\
+* Extract burn window: df[launch_idx:burnout_idx]\
+* time_s = timestamp_ms / 1000.0 - launch_time_s\
+* IAE_pitch = trapz(|kalman_pitch_deg|, time_s)\
+* IAE_yaw = trapz(|kalman_yaw_deg|, time_s)\
+* IAE_total = IAE_pitch + IAE_yaw\
+* Phase-segmented IAE:\
+   * ignition: 0 to 0.3s\
+   * peak: 0.3s to 0.6s\
+   * tail-off: 0.6s to burn end\
+* Return dict with all values\
+
+\f1\fs26 \cb4 plot_hardware_vs_sim(df, launch_idx, burnout_idx, sim_csv_path=None)
+\f0\fs28 \cb3 :\
+\
+* Plot kalman_pitch_deg and kalman_yaw_deg vs time over burn window\
+* If sim_csv_path provided, overlay simulation pitch/yaw from that CSV\
+* Mark burnout with vertical dashed line\
+* Save as 'hardware_vs_sim.png'\
+
+\f1\fs26 \cb4 print_iae_table(hw_iae, sim_iae=None)
+\f0\fs28 \cb3 :\
+\
+* Formatted table:\cb1 \
+\pard\pardeftab720\qr\partightenfactor0
+
+\f1\fs26 \cf5 \cb6 \strokec5 \
+\pard\pardeftab720\partightenfactor0
+\cf8 \strokec8 \uc0\u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 IAE COMPARISON: Hardware vs Simulation\u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 Phase          HW IAE     Sim IAE    \u916 IAE      % diff\u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 Ignition       x.xxx      x.xxx      +x.xxx    +xx%Peak thrust    x.xxx      x.xxx      +x.xxx    +xx%Tail-off       x.xxx      x.xxx      +x.xxx    +xx%  \u8592  aero damping absent on standTotal          x.xxx      x.xxx      +x.xxx    +xx%\u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 \u9552 Note: positive \u916 IAE expected in tail-off (no aero damping on static stand)\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb4 \strokec2 main()
+\f0\fs28 \cb3 :\
+\
+* argparse: positional 
+\f1\fs26 \cb4 csv_path
+\f0\fs28 \cb3 , optional 
+\f1\fs26 \cb4 --sim-iae <float>
+\f0\fs28 \cb3 , optional 
+\f1\fs26 \cb4 --sim-csv <path>
+\f0\fs28 \cb3 \
+* Call load, detect, compute, print, plot\
+* Exit with code 0 on success\
+IMPORTANT NOTES FOR CLAUDE CODE\
+\
+1. Do not use standard Servo.h \'97 use PWMServo.h for Teensy. The library has 
+\f1\fs26 \cb4 servo.writeMicroseconds()
+\f0\fs28 \cb3  not 
+\f1\fs26 \cb4 servo.write()
+\f0\fs28 \cb3  for pulse-width control.\
+2. IntervalTimer callback must be minimal \'97 only set 
+\f1\fs26 \cb4 control_flag = true
+\f0\fs28 \cb3 . Never do I2C reads or SD writes inside the ISR. All real work in loop().\
+3. Servo pins are intentionally blank \'97 left as -1 with TODO comments. The user will fill these in before flashing. Do not hardcode them.\
+4. Axis mapping comment \'97 add a clear comment in mpu_read() that the user must verify gyro_x\uc0\u8594 pitch, gyro_y\u8594 yaw mapping matches their physical IMU mounting orientation. A 90\'b0 rotation error is easy to introduce.\
+5. Gimbal sign convention \'97 add comment: positive pitch error \uc0\u8594  positive gimbal command \u8594  motor tilts to push nose back toward vertical. If rocket overcorrects, flip the sign in the PID call: 
+\f1\fs26 \cb4 pid_pitch.update(-est_pitch, dt)
+\f0\fs28 \cb3  stays negative (corrective), but user should verify direction on bench before live fire.\
+6. CSV column format is fixed \'97 the Python post-processing script expects exactly the header defined above. Do not change column names or order.\
+7. SG90 pulse calibration \'97 note in comments that SG90 pulse range (500\'962500 \'b5s) may need calibration per-servo. Add 
+\f1\fs26 \cb4 SERVO_MIN_US
+\f0\fs28 \cb3  and 
+\f1\fs26 \cb4 SERVO_MAX_US
+\f0\fs28 \cb3  as user-adjustable constants.\
+8. Paper note on servo model \'97 the paper's control effort section refers to MG90S servos but the firmware is written for SG90s. The user should verify which servo they are actually using and adjust pulse ranges accordingly. Add this as a comment in the servo section.\
+DELIVERABLE CHECKLIST\
+\
+* [ ] 
+\f1\fs26 \cb4 tvc_2dof.ino
+\f0\fs28 \cb3  compiles without errors in Arduino IDE with Teensyduino\
+* [ ] All control parameters match Python config.py values exactly\
+* [ ] IntervalTimer used for 150 Hz loop (not delay() or loop() timing)\
+* [ ] Servo pins left as configurable TODO constants\
+* [ ] CSV header and column format documented and consistent with post-processor\
+* [ ] 
+\f1\fs26 \cb4 compute_hardware_iae.py
+\f0\fs28 \cb3  runs on a sample CSV with synthetic data\
+* [ ] IAE computation uses numpy.trapz (consistent with simulation's analysis.py)\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb15 I'll create the firmware and post-processing script. First, let me check the actual simulation config.py to verify the control parameters match, and look at the existing firmware folder.\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf16 \cb15 \strokec16 Read\'a04 files,\'a0ran\'a0a command\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb15 \strokec2 Let me check the\'a0
+\f1\fs26 \cb3 iae
+\f0\fs28 \cb15 \'a0function in simulation.py so the post-processor uses the identical formula.\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf16 \cb15 \strokec16 Ran\'a05 commands,\'a0read\'a0a file,\'a0created\'a02 files\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb15 \strokec2 pandas isn't in the project venv, which conveniently tests the numpy fallback path. Running the script now, both hardware-only and with the sim overlay:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf16 \cb15 \strokec16 Ran\'a02 commands,\'a0read\'a0a file\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb15 \strokec2 The plot looks correct: overlaid traces, burnout marker, proper labels. Now let me verify the firmware compiles. Checking for arduino-cli with the Teensy core:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf16 \cb15 \strokec16 Ran\'a0a command,\'a0edited\'a0a file\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb15 \strokec2 Now the stub-based compile check:\cb1 \
+\pard\pardeftab720\partightenfactor0
+\cf16 \cb15 \strokec16 Ran\'a02 commands\cb1 \
+\
+\pard\pardeftab720\partightenfactor0
+\cf2 \cb15 \strokec2 Both deliverables are complete in the firmware folder, verified against the actual simulation source rather than just the prompt text.\cb1 \
+\pard\pardeftab720\partightenfactor0
+
+\f2\fs30 \cf16 \cb15 \strokec16 What was built\cb1 \
+\pard\pardeftab720\partightenfactor0
+
+\fs28 \AppleTypeServices\AppleTypeServicesF65539\AppleTypeServicesF2359297 \cf13 \cb15 \strokec13 tvc_2dof.ino
+\f0 \AppleTypeServices \cf2 \strokec2 \'a0is the complete Teensy 4.1 sketch: 150 Hz IntervalTimer loop (flag-only ISR, all I2C/SD work in\'a0
+\f1\fs26 \cb3 loop()
+\f0\fs28 \cb15 ), scalar 2-state Kalman filter per axis, PD controller with anti-windup, rate limit and hard stop, launch/burnout state machine, and buffered SD logging (flush every 50 rows) with auto-incrementing\'a0
+\f1\fs26 \cb3 flightNN.csv
+\f0\fs28 \cb15 \'a0filenames. I confirmed the Kalman scalar expansion is algebraically identical to the matrix form in\'a0\cf13 \strokec13 kalman.py\cf2 \strokec2 , the PID ordering matches\'a0\cf13 \strokec13 control.py\cf2 \strokec2 \'a0line for line, and the\'a0
+\f1\fs26 \cb3 update(-est, dt)
+\f0\fs28 \cb15 \'a0error sign matches\'a0\cf13 \strokec13 simulation.py:136\cf2 \strokec2 . All constants were checked against the real\'a0\cf13 \strokec13 config.py\cf2 \strokec2 , and they match the prompt exactly.\cb1 \
+
+\f2 \AppleTypeServices\AppleTypeServicesF65539\AppleTypeServicesF2359297 \cf13 \cb15 \strokec13 compute_hardware_iae.py
+\f0 \AppleTypeServices \cf2 \strokec2 \'a0loads the log (pandas with a numpy fallback; your venv lacks pandas, so the fallback path is what I tested), finds the burn window from\'a0
+\f1\fs26 \cb3 flight_state
+\f0\fs28 \cb15 , computes trapezoidal IAE total and per phase (0-0.3s, 0.3-0.6s, 0.6s-end, matching config.py boundaries), prints the comparison table, and saves\'a0
+\f1\fs26 \cb3 hardware_vs_sim.png
+\f0\fs28 \cb15 . It uses the same\'a0
+\f1\fs26 \cb3 trapezoid
+\f0\fs28 \cb15 /
+\f1\fs26 \cb3 trapz
+\f0\fs28 \cb15 \'a0NumPy 2.x compatibility shim as simulation.py. Verified end to end on synthetic data: both\'a0
+\f1\fs26 \cb3 --sim-iae
+\f0\fs28 \cb15 \'a0and\'a0
+\f1\fs26 \cb3 --sim-csv
+\f0\fs28 \cb15 \'a0modes run, exit 0, and the plot renders correctly with sim overlay and burnout marker.\cb1 \
+\pard\pardeftab720\partightenfactor0
+
+\f2\fs30 \cf16 \cb15 \strokec16 Deviations from the prompt spec, all deliberate\cb1 \
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls1\ilvl0
+\fs28 \cf2 \cb15 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	1	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 PWMServo API
+\f0 : the prompt said to use\'a0
+\f1\fs26 \cb3 servo.writeMicroseconds()
+\f0\fs28 \cb15 , but Teensy's PWMServo does not have that method; it only has\'a0
+\f1\fs26 \cb3 write(0-180 deg)
+\f0\fs28 \cb15 \'a0with the pulse range set in\'a0
+\f1\fs26 \cb3 attach(pin, min_us, max_us)
+\f0\fs28 \cb15 . I kept all calibration constants in microseconds and convert inside\'a0
+\f1\fs26 \cb3 write_servo_deg()
+\f0\fs28 \cb15 . Resolution is about 0.22 deg of gimbal, below the SG90 deadband.\cb1 \
+\ls1\ilvl0
+\f2 \cb15 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	2	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 MPU byte pairing
+\f0 :\'a0
+\f1\fs26 \cb3 (Wire.read() << 8) | Wire.read()
+\f0\fs28 \cb15 \'a0has unspecified evaluation order before C++17 and can swap bytes; I read all 14 bytes into a buffer first.\cb1 \
+\ls1\ilvl0
+\f2 \cb15 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	3	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Burnout file close
+\f0 : the final row with\'a0
+\f1\fs26 \cb3 flight_state = 2
+\f0\fs28 \cb15 \'a0is written before the file is flushed and closed, because the post-processor needs at least one BURNOUT row to find the burn window.\cb1 \
+\ls1\ilvl0
+\f2 \cb15 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	4	}\expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 Static stand caveat
+\f0 \'a0(commented in the code): with the rocket clamped, the accelerometer reads ~1 g throughout the burn, so launch detection relies on the ignition vibration spike and burnout will normally be caught by the 3.0 s safety timeout rather than the 0.3 g free-fall criterion. Both paths center the servos and seal the log.\cb1 \
+\pard\pardeftab720\partightenfactor0
+
+\f2\fs30 \cf16 \cb15 \strokec16 Verification status\cb1 \
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs28 \cf2 \cb15 \strokec2 The Python script is fully tested. The sketch passed a host-side compile check (
+\f1\fs26 \cb3 -Wall -Wextra
+\f0\fs28 \cb15 , gnu++14 and gnu++17) against stub headers that mirror the real Teensy library signatures; arduino-cli with the Teensy core isn't installed on this machine, so do one real Verify/Compile in Arduino IDE before flashing. Worth noting: CLAUDE.md says the control loop is 200 Hz, but config.py and this firmware both use 150 Hz; you may want to update CLAUDE.md. Before live fire, the in-file checklist covers the four bench items: set the servo pins, verify IMU axis mapping, verify gimbal correction direction, and calibrate the servo pulse range (also relevant to the open SG90 vs MG90S discrepancy from the paper).\cb1 \
+}
