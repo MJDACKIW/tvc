@@ -385,10 +385,10 @@ def fig01_thrust_curve():
     ax.annotate('Peak: 33.0 N\n@ t = 0.287 s', xy=(PEAK_TIME, PEAK_THRUST),
                 xytext=(0.85, 30.0), fontsize=10, color='dimgrey',
                 arrowprops=dict(arrowstyle='->', color='grey'))
-    fig.suptitle('Estes E12-4 Thrust Curve — NAR Certified Data (ThrustCurve.org)',
-                 fontsize=13, y=0.99)
-    ax.set_title('Peak = 33.0 N  |  Mean = 11.12 N  |  Burn time = 2.44 s',
-                 fontsize=10, color='dimgrey')
+    # fig.suptitle('Estes E12-4 Thrust Curve — NAR Certified Data (ThrustCurve.org)',
+    #              fontsize=13, y=0.99)
+    # ax.set_title('Peak = 33.0 N  |  Mean = 11.12 N  |  Burn time = 2.44 s',
+    #              fontsize=10, color='dimgrey')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Thrust (N)')
     ax.set_xlim(0.0, PLOT_END)
@@ -418,7 +418,7 @@ def fig02_baseline_response():
                 fontsize=9, bbox=WHEAT_BOX,
                 arrowprops=dict(arrowstyle='->', color='grey'))
     ax.set_ylabel('Pitch Angle (deg)')
-    ax.set_title('Attitude Stabilisation Using TVC — Baseline Closed-Loop Response')
+    # ax.set_title('Attitude Stabilisation Using TVC — Baseline Closed-Loop Response')
     _grid(ax)
     ax.legend(loc='upper right', fontsize=9)
 
@@ -464,8 +464,8 @@ def fig03_open_vs_closed():
             label='Closed-loop (TVC active)')
     ax.plot(t, opened['true_angle'], color='tab:orange', ls='--', lw=1.8,
             label='Open-loop (no control)')
-    ax.set_title('Open-Loop vs. Closed-Loop Attitude Response\n'
-                 '(Finless Configuration, θ₀ = 5°)')
+    # ax.set_title('Open-Loop vs. Closed-Loop Attitude Response\n'
+    #              '(Finless Configuration, θ₀ = 5°)')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Pitch Angle (deg)')
     ax.set_xlim(0.0, PLOT_END)
@@ -492,7 +492,7 @@ def fig04_disturbance():
             label='With disturbance (τ = 0.12 N·m, 50 ms)')
     ax.plot(t, nominal['true_angle'], color='tab:orange', ls='--', lw=1.6,
             label='Nominal (no disturbance)')
-    ax.set_title('Disturbance Rejection Response Under TVC Control')
+    # ax.set_title('Disturbance Rejection Response Under TVC Control')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Pitch Angle (deg)')
     ax.set_xlim(0.0, PLOT_END)
@@ -507,7 +507,7 @@ def fig04_disturbance():
               color='tab:blue', lw=1.2)
     axin.axvspan(0.6, 0.65, facecolor='#f48fb1', alpha=0.45)
     axin.axhline(0.0, color='grey', lw=0.6)
-    axin.set_title('Deviation from nominal (deg)', fontsize=8)
+    # axin.set_title('Deviation from nominal (deg)', fontsize=8)
     axin.tick_params(labelsize=7)
     axin.grid(True, linestyle='--', alpha=0.4)
 
@@ -536,7 +536,7 @@ def fig05_control_effort():
     ax.axhline(GIMBAL_LIMIT, color='red', ls=':', lw=1.3,
                label='±Saturation limit')
     ax.axhline(-GIMBAL_LIMIT, color='red', ls=':', lw=1.3)
-    ax.set_title('Control Effort — Commanded vs. Achieved Gimbal Deflection')
+    # ax.set_title('Control Effort — Commanded vs. Achieved Gimbal Deflection')
     ax.set_ylabel('Gimbal Angle (deg)')
     ax.set_ylim(-12.0, 12.0)
     _grid(ax)
@@ -548,7 +548,7 @@ def fig05_control_effort():
     _burnout_line(ax)
     ax.plot(t, sat_pct, color='red', lw=1.6,
             label='Cumulative fraction at |δ| ≥ 9.9°')
-    ax.set_title('Actuator Saturation — Fraction of Time at Mechanical Limit')
+    # ax.set_title('Actuator Saturation — Fraction of Time at Mechanical Limit')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Cumulative Saturation (%)')
     ax.set_xlim(0.0, PLOT_END)
@@ -582,7 +582,7 @@ def fig06_sensitivity():
                                 (1.30, 'tab:green', '+30%')]:
         r = run_simulation(theta0_deg=5.0, thrust_scale=scale, seed=42)
         ax.plot(r['time'], r['true_angle'], color=color, lw=1.5, label=label)
-    ax.set_title('(a) Sensitivity to Thrust', fontsize=11)
+    # ax.set_title('(a) Sensitivity to Thrust', fontsize=11)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Pitch Angle (deg)')
     _grid(ax)
@@ -597,7 +597,7 @@ def fig06_sensitivity():
                                 (1.20, 'tab:green', '+20% L')]:
         r = run_simulation(theta0_deg=5.0, moment_arm_scale=scale, seed=42)
         ax.plot(r['time'], r['true_angle'], color=color, lw=1.5, label=label)
-    ax.set_title('(b) Sensitivity to CoM-Nozzle\nDistance (L)', fontsize=11)
+    # ax.set_title('(b) Sensitivity to CoM-Nozzle\nDistance (L)', fontsize=11)
     ax.set_xlabel('Time (s)')
     _grid(ax)
     ax.legend(loc='upper right', fontsize=9)
@@ -612,7 +612,7 @@ def fig06_sensitivity():
                               (12.0, 'tab:red', '12°')]:
         r = run_simulation(theta0_deg=5.0, gimbal_limit_override=lim, seed=42)
         ax.plot(r['time'], r['true_angle'], color=color, lw=1.5, label=label)
-    ax.set_title('(c) Sensitivity to Max\nGimbal Angle', fontsize=11)
+    # ax.set_title('(c) Sensitivity to Max\nGimbal Angle', fontsize=11)
     ax.set_xlabel('Time (s)')
     _grid(ax)
     ax.legend(loc='upper right', fontsize=9)
@@ -621,8 +621,8 @@ def fig06_sensitivity():
         ax.set_xlim(0.0, PLOT_END)
     axs[0].set_ylim(-1.0, 5.5)
 
-    fig.suptitle('Parametric Sensitivity Analysis — Pitch Response  (θ₀ = 5°)',
-                 fontsize=13)
+    # fig.suptitle('Parametric Sensitivity Analysis — Pitch Response  (θ₀ = 5°)',
+    #              fontsize=13)
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.95))
     _save(fig, 'fig06_sensitivity.png')
 
@@ -650,7 +650,7 @@ def fig07_control_authority():
                 xy=(PEAK_TIME, peak_tau), xytext=(0.85, 1.45),
                 fontsize=10, color='dimgrey',
                 arrowprops=dict(arrowstyle='->', color='grey'))
-    ax.set_title('TVC Corrective Torque Authority vs. Time')
+    # ax.set_title('TVC Corrective Torque Authority vs. Time')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Torque (N·m)')
     ax.set_xlim(0.0, PLOT_END)
@@ -683,8 +683,8 @@ def fig08_kalman_performance():
                 xy=(3.3, res['kalman_angle'][i_ann]), xytext=(1.1, 6.2),
                 fontsize=9, bbox=WHEAT_BOX,
                 arrowprops=dict(arrowstyle='->', color='grey'))
-    ax.set_title('Kalman Filter Performance — Noise Rejection vs. Raw Measurement\n'
-                 '(MPU-6050 noise model, Section 3.2)')
+    # ax.set_title('Kalman Filter Performance — Noise Rejection vs. Raw Measurement\n'
+    #              '(MPU-6050 noise model, Section 3.2)')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Pitch Angle (deg)')
     ax.set_xlim(0.0, PLOT_END)
@@ -720,9 +720,9 @@ def fig09_stability_boundary():
     ax.contour(thetas, rates, recovered, levels=[0.5], colors='black',
                linewidths=1.6)
     ax.axvline(GIMBAL_LIMIT, color='tab:blue', ls='--', lw=1.6)
-    ax.set_title('TVC Controllability Boundary\n'
-                 r'$\theta_0$ vs. $\dot{\theta}_0$ — Recoverable vs. '
-                 'Divergent Trajectories')
+    # ax.set_title('TVC Controllability Boundary\n'
+    #              r'$\theta_0$ vs. $\dot{\theta}_0$ — Recoverable vs. '
+    #              'Divergent Trajectories')
     ax.set_xlabel('Initial Pitch Angle (deg)')
     ax.set_ylabel('Initial Angular Rate (deg/s)')
     handles = [
@@ -777,9 +777,9 @@ def fig10_monte_carlo():
         p95 = np.percentile(runs, 95, axis=0)
         ax.fill_between(t, p05, p95, color='grey', alpha=0.35)
         ax.plot(t, runs.mean(axis=0), color='black', lw=2.0)
-        ax.set_title(f'Monte Carlo — {axis_name} Axis\n'
-                     f'({n_rec}/{n_trials} trials recovered, '
-                     'θ₀ ∈ [0.5°, 6°], T_scale ∈ [±8%])', fontsize=11)
+        # ax.set_title(f'Monte Carlo — {axis_name} Axis\n'
+        #              f'({n_rec}/{n_trials} trials recovered, '
+        #              'θ₀ ∈ [0.5°, 6°], T_scale ∈ [±8%])', fontsize=11)
         ax.set_xlabel('Time (s)')
         ax.set_xlim(0.0, PLOT_END)
         _grid(ax)
@@ -790,8 +790,8 @@ def fig10_monte_carlo():
         ax.legend(handles=handles, loc='upper right', fontsize=9)
     axs[0].set_ylabel('Angle (deg)')
 
-    fig.suptitle('Two-Axis Monte Carlo Simulation Under Realistic Launch '
-                 'Variability', fontsize=13)
+    # fig.suptitle('Two-Axis Monte Carlo Simulation Under Realistic Launch '
+    #              'Variability', fontsize=13)
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     _save(fig, 'fig10_monte_carlo.png')
     return int(np.sum(pitch_ok)), int(np.sum(yaw_ok))

@@ -1,0 +1,120 @@
+\section{Control Theory and PID Stabilization}
+
+TVC requires real-time orientation correction to counteract disturbances such as wind, manufacturing errors, or uneven thrust. This is achieved through a closed-loop control system, combining an IMU, a Kalman filter, and a dual-axis PID controller that continuously adjusts the rocket’s motor angle to correct pitch and roll deviations. 
+
+
+\subsection{Orientation Control using PID}
+
+At the core of the TVC system lies a Proportional-Integral-Derivative (PID) controller which stabilizes the rocket by adjusting the motor’s deflection angle in real time. Ideally, the PID controller would oppose external forces acting on the rocket that cause the rocket to deviate away from a normal vertical attitude (0° tilt) . This ensures that the rocket motors’ thrust acts directly parallel to the rocket’s CoM. The controller minimizes the angular error between the desired vertical orientation and the actual tilt, using raw data from the Inertial measurement unit. The PID controller stabilizes pitch and roll independently. Each axis is treated as an independent, separate control loop with its own error data, feedback, and subsequent correction signal to the Servo motors. 
+
+
+The overarching equation representing a PID controller is:
+
+
+\[
+u(t) = K_p e(t) + K_i \int_0^t e(\tau)d\tau + K_d \frac{de(t)}{dt}
+\]
+
+where:
+
+\begin{itemize}
+    \item $u(t)$: Control output — the commanded servo deflection angle.
+    \item $e(t)$: Measured angular error at time, $t$, representing the deviation between the measured attitude and the nominal vertical orientation of $0^\circ$ for pitch and roll.
+    \item $K_p$, $K_i$, $K_d$: The tuned proportional, integral, and derivative gains respectively.
+\end{itemize}
+
+Each term serves a distinct function in stabilizing the rocket. The proportional term ($K_p$) provides immediate correction to measured angular deviation from the nominal angle. However, if the proportional term is too high, it can induce oscillation. The integral term (Ki) is responsible for removing steady-state error. It does this by summing the error over time (definition of an integral), ensuring that the system returns to its exact setpoint after prolonged deviations. However, a large integral value may cause overshoot or oscillatory drift. The Derivative term (Kd) predicts future error by considering its rate of change, effectively damping the response. It reduces oscillation and improves stability, but excessive derivative gain amplifies measurement noise, especially in systems, like rockets, where IMU data is inherently noisy.
+
+Tuning these gains requires iterative ground and simulated testing to achieve stability without excessive oscillation. Initial values can be estimated using the Ziegler–Nichols heuristic method, which can often lead to excessive PID gains due to its intentional aggressive tuning nature, which is not suitable for a rocket that requires stability and minimal overshoot to avoid excessive oscillation. This initial theoretical calculation of PId values is followed by empirical adjustment through a static fire test, ensuring that servo commands remain within their actuation limits and that oscillatory behavior was minimized during rapid attitude correction.
+
+Limitations of the PID control model:
+While the PID control model addresses a way to correct for attitude deviations, it assumes a linearity between the input (servo commands) and outputs (angular deflection). In reality, during powered flight, the relationship between motor deflection and rocket rotation is nonlinear due to aerodynamic effects, a shifting center of mass (from the combustion of propellant), and the thrust curve that is inherent to a solid rocket motor. To mitigate these limitations, the PID controller’s derivative term can be tuned conservatively, and integral windup protection can be applied to avoid overshoot when the system has reached its maximum gimbal correction angle.
+
+
+
+\subsection{Sensor Fusion using a Kalman Filter}
+
+As established, the Control system relies on real-time flight data from sensors. In a perfect world, these sensors would have no noise and translate instantaneous measurements of essential attitude data, but this is not the case. The Gyroscope is accurate for short-term measurements, but measurements drift over time due to inherent limitations in their sensing technology and the way they process data. The Accelerometer provides measurements that are subject to noise under thrust and vibration - two unavoidable fundamentals in rocketry.
+To ensure that this sensor ‘noise’ is mitigated, a Kalman Filter is implemented to fuse the accelerometer and gyroscope. The Kalman filter works by:
+
+\begin{itemize}
+    \item \textbf{Prediction:} Integrating the Gyroscope angular velocity $\omega$ to estimate the new orientation.
+    \[
+    \hat{x}_{k|k-1} = \hat{x}_{k-1} + \omega_k \Delta t
+    \]
+    \item \textbf{Update:} Corrects this prediction using accelerometer data, weighted by the filter’s confidence in each sensor:
+    \[
+    \hat{x}_k = \hat{x}_{k|k-1} + K_k (z_k - H \hat{x}_{k|k-1})
+    \]
+\end{itemize}
+
+where:
+
+\begin{itemize}
+    \item $\hat{x}_k$: Filtered attitude estimate at time step $k$.
+    \item $z_k$: Accelerometer-derived measurement of tilt.
+    \item $K_k$: Kalman gain, which determines how much the new measurement influences the estimate.
+    \item $H$: Observation model, typically the identity matrix for direct measurement mapping.
+\end{itemize}
+
+The Kalman gain $K_k$ is dynamically updated to minimize the posterior error covariance, allowing the filter to adapt in real-time to changing vibration or thrust conditions. In more simple terms, the Kalman gain ($K_k$) automatically adjusts in real-time: it constantly recalculates how much to trust to assign to each sensor so the rocket can stay stable even when the engine is vibrating or the thrust, due to the thrust curve, is changing rapidly. The gain is computed as:
+
+\[
+K_k = \frac{P_{k|k-1} H^T}{H P_{k|k-1} H^T + R}
+\]
+
+where $P_{k|k-1}$ represents the predicted estimate covariance and $R$ is the measurement noise covariance associated with accelerometer readings.  
+
+The outcome is a clean, smooth estimate of the rocket’s orientation that suppresses short-term vibration noise and long-term gyroscopic drift. While the Kalman filter effectively stabilizes the pitch and roll axes, it is important to note that without a magnetometer for an absolute heading reference, the yaw axis is subject to gradual gyroscopic drift. However, for the short duration of a typical model rocket motor burn (approximately 2–5 seconds), this drift is mathematically negligible and does not significantly impact the system's ability to maintain a vertical ascent. This filtered attitude data is then fed directly into the PID controller, ensuring stable and precise actuation of the gimbal during dynamic phases of flight.  
+
+The effectiveness of this filtering approach was validated by comparing simulated IMU data to real flight logs. The Kalman filter consistently reduced instantaneous tilt noise by approximately 70–80\%, which in turn improved the responsiveness and accuracy of the PID-driven control loop.
+
+\subsection{Stability Constraints and PID gain Tuning Methodology}
+
+Designing a closed-loop control system for a thrust-vector-controlled rocket required careful consideration of both control authority and physical response constraints. The PID controller’s ability to stabilize the vehicle depended not only on well-tuned gain values but also on mechanical, aerodynamic, and computational limitations inherent to the component selection for this project. 
+One of the most significant constraints was the servo response speed relative to the rocket’s dynamic instability growth rate. The MG90S servos used in the gimbal system have an average actuation speed of 60$\degree$ per 0.12 seconds. This means that the control bandwidth is roughly 8-10Hz which is relevant due to the necessity for fast responses to commands from the closed-loop control system. To ensure stability is maximized, the control loop update rate on the Teensy 4.1 Microcontroller was set to 150Hz, significantly higher than the actuator frequency. This allows the controller to detect and respond to deviations before they propagate into larger oscillations that may affect the rocket’s path. 
+The control authority of the system - total torque available from gimbal deflection - was defined by the motor thrust (30.6N) and the gimbal arm length (the perpendicular distance between the thrust vector and the rocket’s centerline). The corrective moment is then defined as: 
+
+\[\tau = F_{t} \cdot r \cdot sin\theta\]
+
+Where $F_{T}$ is the instantaneous motor thrust, r is the distance from the thrust line to the rocket’s center of mass, and  is the gimbal deflection angle. Because the gimbal’s maximum range was $\pm$10°, the available corrective torque was limited to due the range constraint. Therefore, a limited domain had to be placed on the PID deflection commands to limit the possibility of corrections that would not be attainable because of the limited deflection angle of the gimbal. This phenomenon is called actuator saturation (where the controller asks for more movement than the motor is physically capable of). The control output of the control system was limited to $\pm$10°. 
+
+
+\subsection{Limits of Control Authority and Tilt Recovery}
+
+The ability of a thrust-vector-controlled rocket to maintain or recover stable flight depends fundamentally on the system’s control authority - the total corrective torque the TVC mechanism can supply relative to the growth rate of angular disturbances. When the corrective capability of the control mechanism is exceeded, the rocket is no longer able to return to its nominal vertical orientation, resulting in a potential uncontrolled mission failure from a loss of stability.
+Control authority is limited by a variety of constraints. These limitations are a combination of servo constraints, motor thrust characteristics, aerodynamic forces, structural geometry, and sensor latency. The following subsections explain these limitations in detail and define the theoretical maximum recoverable tilt angle. 
+
+\subsubsection{Corrective Torque Limitations}
+The total corrective torque generated by the TVC system is determined by the thrust magnitude of the rocket motor, the offset between the gimbal and the center of mass, and the gimbal’s maximum corrective deflection angle. This corrective torque is given by the equation:
+
+\[\tau_{max} = F_{T} \cdot r \cdot sin(\theta_{max})\]
+
+Where:
+
+\begin{itemize}
+    \item $F_{T}$ is the motor thrust.
+    \item $r$ is the perpendicular distance from the thrust line to the center of mass.
+    \item $\theta_{max}$ is the maximum gimbal deflection angle.
+\end{itemize}
+This brings us to the first mechanical limitation of the corrective system. The control system can only deviate by a fixed degree, meaning that the TVC system has a physically limited torque. As the rocket tilts farther from vertical, a greater corrective torque is required to counteract both gravitational torque and aerodynamic moments. Once the torque of the disturbance exceeds the calculated $\tau_{max}$ recovery is an impossibility regardless of how precisely the PID controller is tuned.
+
+\subsubsection{Maximum Recoverable Tilt Angle}
+The maximum recoverable tilt angle defines the largest angular deviation from vertical from which the TVC system can successfully return the rocket to a stable orientation during powered flight. This angle is determined by comparing the maximum corrective torque available from thrust vectoring with the combined disturbance torques acting on the rocket.
+The main disturbance torques arise from three sources: Aerodynamic restoring or destabilizing moments, which increase with angle of attack and velocity; Gravitational torque, which increases as the rocket’s center of mass moves laterally away from the thrust axis; Inertial Torque, which depends on the rocket’s angular velocity and moment of inertia. 
+For small angles, using small angle approximations, aerodynamic and gravitational torques scale approximately linearly with tilt angle. As tilt increases, however, these moments grow faster than the available corrective torque due to the fixed gimbal deflection limit. Once the disturbance torque exceeds the maximum available corrective torque defined in Section 3.4.1, recovery is no longer possible, even if thrust remains available.
+This theorization establishes a theoretical recovery boundary where:
+
+\[\tau_{disturbance}(\theta) \leq \tau_{max}\]
+
+Beyond this boundary, the control system enters a divergent path in which further corrective commands will not provide sufficient angular acceleration to reverse the motion. In practical terms, this means that there exists a finite degree to which the rocket can tilt in which corrective forces can still be applied to stabilize the rocket - otherwise, the flight becomes unrecoverable.
+Specifically, for this vehicle, simulations and empirical testing indicated that stable recovery was consistently achievable for pitch and roll deviations approximately below 12$\degree$, depending on instantaneous thrust and airspeed. This value is slightly greater than the mechanical gimbal limit ($\sim$12$\degree$)due to the fact that recovery relies on angular acceleration over time.
+
+
+\subsubsection{Dynamic Effects and Control Latency}
+
+In addition to static torque limitations, tilt recovery is constrained by dynamic effects related to control latency, actuator response speed, and sensor update rates. Even when sufficient corrective torque exists in theory, delays in these other factors can allow angular deviations to grow beyond recoverable limits before corrective torque can be applied. In a perfect world, this delay would not exist, but even milliseconds of control delay can cause the system to over or undercorrect. 
+The MG90S servos used in this specific TVC system exhibit a finite response time of approximately 0.12 seconds per 60$\degree$ of motion. This inherently poses a limitation to how quickly the thrust vector can be redirected in response to sudden disturbances. For example, if the rocket experiences a rapid tip-off event immediately after launch, as often happens with light-weight aerial vehicles, the servo response may lag behind the disturbance, allowing angular velocity to increase faster than the system can react. 
+In a similar way, sensor latency and filtering introduce additional marginal delay. Although the IMU provides data frequently, the Kalman filter smooths rapid jumps in sensor data to reduce noise. This introduces a small but unavoidable phase lag in attitude estimation. While this tradeoff improves stability under vibration, it reduces responsiveness to extremely fast disturbances.
+These combined effects impose a dynamic recovery limit, where recovery fails not because torque is insufficient, but because corrective movement occurs too late. To mitigate this risk, conservative PID gains can be selected, prioritizing stability and predictability over aggressive corrections. Additionally, the control loop frequency should be set significantly higher than the actuator bandwidth to minimize computational delay and ensure that corrective commands are issued as early as possible. 
+To conclude, these constraints define a very specific, calculatable domain of controllability for the thrust-vector-controlled rocket, within which stable flight and recovery are a possibility. Understanding this domain was essential in both the mechanical design of the gimbal system and the tuning of the closed-loop control algorithm.

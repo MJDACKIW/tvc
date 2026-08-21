@@ -7,7 +7,8 @@
       "Bash(./venv/bin/pip install *)",
       "Bash(./venv/bin/python -c \"import numpy, matplotlib, scipy; print\\('numpy', numpy.__version__, '| matplotlib', matplotlib.__version__, '| scipy', scipy.__version__\\)\")",
       "Bash(time ../venv/bin/python tvc_paper_figures.py)",
-      "Bash(../venv/bin/python tvc_paper_figures.py)"
+      "Bash(../venv/bin/python tvc_paper_figures.py)",
+      "Bash(../venv/bin/python -c ' *)"
     ]
   }
 }

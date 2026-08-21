@@ -1,0 +1,45 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+This project began with a straightforward question: could a high school student, working
+independently, design and implement a functional thrust vector control system for a model rocket
+from the ground up? The answer, after years of iterative hardware design, self-directed learning,
+and rigorous analysis, is yes. The process of getting there is perhaps as significant as the
+result itself.
+
+From a technical standpoint, this paper has demonstrated that thrust vector control is a viable
+stabilization mechanism at the hobby scale. The PID-Kalman control architecture, implemented on a
+Teensy 4.1 microcontroller and driven by real-time MPU-6050 sensor data \cite{invensense_mpu6050, pjrc_teensy41}, produced stable closed-loop behavior across a range of simulated disturbance
+scenarios. Simulation results consistently showed that the system could arrest angular deviations,
+reject external disturbances, and operate within actuator limits without passive aerodynamic
+stabilization. The Monte Carlo analysis further validated the robustness of the control
+architecture under compounded uncertainty, demonstrating that failure modes were governed by
+physical constraints rather than control instability.
+
+It is important to be clear about the boundaries of these conclusions. The validation presented
+here is entirely simulation-based. Airspace restrictions prevented powered flight testing, which
+means that real-world phenomena---including structural vibration, aeroelastic coupling, launch
+rail dynamics, and high-acceleration sensor behavior---remain unverified. The rigid-body assumption
+underlying all simulations is a meaningful simplification, and the gap between simulated and actual
+flight performance is something only a real launch can close. This paper should therefore be read
+as a rigorous design and analysis study rather than a flight-validated system.
+
+Several natural next steps follow from this work. A companion research study is currently underway
+to directly quantify the accuracy of the simulation framework developed here, using a custom 2-DOF
+static test stand to conduct live motor firings and compare measured angular error against
+simulation predictions using the Integral of Absolute Error as the primary performance metric.
+This work will identify where the simulation diverges from physical reality and trace that gap back
+to specific unmodeled phenomena such as actuator rate saturation, gimbal friction, and vibration
+noise. Beyond that, integrating a barometric pressure sensor would provide an independent altitude
+measurement for more robust apogee detection. On the control side, adaptive gain scheduling---where
+PID parameters shift as a function of thrust magnitude or estimated dynamic pressure---could
+meaningfully improve performance during the thrust decay phase where control authority diminishes
+most rapidly. Extending the platform to a multi-stage configuration would introduce additional
+complexity in both the state machine and the control architecture, representing a logical
+progression of the current design.
+
+More broadly, the goal of this project was never exclusively technical. Thrust vector control
+remains largely inaccessible in hobbyist and educational rocketry, not because the physics are
+beyond reach, but because the path from concept to implementation is poorly documented at the
+small scale. If this paper helps another student shortcut even a fraction of the trial and error
+that went into this system, it will have done exactly what it was meant to do.

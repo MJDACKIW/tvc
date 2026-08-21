@@ -1,0 +1,88 @@
+\section{System Architecture Overview}
+
+
+This section describes the mechanical, electrical, and computational architecture of the thrust-vector-controlled model rocket. Particular emphasis is placed on component selection, system integration, and the engineering tradeoffs required to achieve reliable closed-loop control within the constraints of a small-scale vehicle.
+
+
+
+\subsection{Mechanical Airframe \& Structural Elements}
+
+The rocket airframe was designed around a standard 76 mm (3 in) cardboard body tube manufactured by Estes Rockets. This diameter provided sufficient internal volume for the thrust vectoring gimbal, avionics bay, and recovery system while maintaining a manageable mass and aerodynamic profile. Custom structural components were designed in Fusion 360 and fabricated using fused deposition modeling (FDM) 3D printing with PLA filament.
+
+The nose cone was designed as a hollow, aerodynamically contoured structure to reduce drag during ascent while housing the recovery system. Its geometry was optimized to minimize frontal area and promote stable airflow, while still allowing sufficient internal volume for parachute packing and deployment hardware.
+
+The avionics bay serves as the structural and functional core of the vehicle. It houses the flight computer, inertial measurement unit (IMU), power regulation hardware, and wiring harness. The avionics were enclosed within a protective internal sleeve to shield sensitive electronics from combustion byproducts produced during black powder motor operation, including carbon dioxide, nitrogen, and carbon monoxide. This enclosure also provided structural isolation from exhaust turbulence and vibration.
+
+The thrust assembly consists of the motor mount, retention system, and exhaust shielding designed to interface directly with the TVC gimbal. The motor mount was 3D printed with high infill density to maximize rigidity while minimizing mass and preventing unwanted shifts in the center of mass. An Estes E12-4 solid rocket motor was selected for this prototype due to its predictable thrust curve and compatibility with the airframe scale. The motor mount incorporates mechanical retention screws positioned beneath the solid propellant grain to prevent axial movement during ignition and powered flight. When the gimbal is at its neutral position, the motor centerline is aligned with the rocket’s longitudinal axis to avoid introducing unintended moments.
+
+Passive aerodynamic fins were intentionally omitted from the design. This decision allowed thrust vector control to serve as the sole stabilization mechanism, more closely modeling real-world TVC applications such as the Falcon 9 first stage. While active or passive fins can provide stabilization at higher airspeeds, their exclusion ensured that all attitude correction authority originated from the gimbal system alone.
+
+
+\subsection{Thrust Vectoring (TVC) System Design}
+
+The active stabilization system is centered around a two-axis thrust vector control gimbal that allows the rocket motor to deflect independently in pitch and yaw relative to the vehicle’s longitudinal axis. This capability enables real-time corrective torque application during powered flight.
+
+The gimbal mechanism consists of a nested, dual-axis structure mounted within the aft section of the airframe. It was designed as a multi-part PLA assembly to maximize available degrees of freedom while maintaining sufficient stiffness under thrust loading. Two MG90S digital micro servos actuate the gimbal, selected for their favorable torque-to-weight ratio, rapid response time, and ease of integration with the flight computer. The manufacturer datasheet rates the MG90S at 0.10 s per 60\degree{} under no-load conditions \cite{towerpro_mg90s}; this paper uses a more conservative figure of 0.12 s per 60\degree{} throughout, reflecting the additional load imposed by the gimbal mechanism and motor assembly relative to the unloaded datasheet rating.
+
+The gimbal provides a maximum deflection range of ±10 degrees in both pitch and yaw. This range was determined through simulation and mechanical testing to provide sufficient corrective authority for a rocket of this size while avoiding excessive coupling effects or mechanical interference. Because corrective torque is directly proportional to the deflection angle, this limit defines the upper bound of achievable control authority during powered flight.
+
+
+
+\subsection{Avionics \& Sensor Suite}
+
+Vehicle orientation and acceleration are measured using an MPU-6050 inertial measurement unit, which integrates a three-axis gyroscope and three-axis accelerometer into a single module. The gyroscope provides high-rate angular velocity measurements suitable for short-term attitude estimation, while the accelerometer provides absolute orientation reference under low-dynamic conditions. Sensor data is transmitted digitally to the flight computer via the I²C protocol.
+Although the MPU-6050 lacks onboard magnetometer or barometric sensors, its high update rate, affordability, and compatibility with embedded development platforms made it suitable for this prototype. Its limitations are addressed through software-based sensor fusion, described in Section 3.2.
+Flight data is logged using the Teensy 4.1’s onboard SD card interface at frequencies between 100 and 200 Hz. Logged parameters include IMU measurements, gimbal deflection angles, system state transitions, and apogee detection events. This high temporal resolution enables detailed post-flight analysis of control system performance and disturbance response.
+Several onboard LEDs provide real-time visual feedback of system status, including power availability, IMU initialization, and flight mode. These indicators proved useful during ground testing and pre-launch diagnostics.
+Power is supplied by a two-cell lithium polymer battery regulated to 5 V via a buck converter. The system is designed to handle transient current spikes caused by servo actuation, with additional capacitive smoothing included to mitigate voltage sag. Modular JST and Dupont connectors were used throughout the wiring harness to facilitate rapid component replacement and reduce the risk of permanent damage during testing.
+
+
+\subsection{Onboard Flight Computer \& Software Stack}
+
+The flight computer is built around a Teensy 4.1 microcontroller, selected for its high computational throughput, reliability, and integrated storage capabilities. Its ARM Cortex-M7 processor operates at 600 MHz, providing ample processing headroom for real-time control loops, Kalman filtering, and state machine logic without risk of timing overruns. The board’s extensive I/O support allows simultaneous interfacing with the IMU, servos, status indicators, and safety switches.
+
+At the highest level, the system transitions between predefined operational modes including pad idle, powered flight, apogee detection, descent, recovery, and post-landing (detailed in Section 4 and Appendix A.1).
+
+The flight software is implemented using Arduino-based C++, leveraging standard libraries for I²C communication, SD card access, and servo control, alongside a custom Kalman filter implementation. This development approach combines the accessibility of the Arduino ecosystem with the computational performance required for advanced control and data analysis.
+
+
+\subsection{Justification for TVC vs. Passive Fins}
+
+Compared to passive aerodynamic stabilization methods, thrust vector control offers significantly greater authority during low-speed and early ascent phases, where aerodynamic forces are minimal. Static fins rely on airflow to generate stabilizing moments and therefore become effective only after sufficient velocity has been achieved. In contrast, thrust vectoring allows corrective forces to be applied immediately after ignition, when disturbances and asymmetries are most likely to grow rapidly.
+
+This capability is particularly important for low-mass rockets, which are highly sensitive to wind, thrust misalignment, and manufacturing tolerances. Small deviations in attitude can quickly compound into large trajectory errors if not corrected early. By actively redirecting thrust, the TVC system provides precise and anticipatory corrections, reducing reliance on passive aerodynamic damping.
+
+Furthermore, the omission of fins results in a vehicle that is inherently aerodynamically unstable, as the center of pressure (CoP) remains forward of the center of mass (CoM) throughout powered flight. This configuration effectively mimics the `inverted pendulum' challenge found in orbital-class boosters, necessitating the active, high-frequency balancing performance that only a TVC system can provide.
+
+\subsection{System Integration Considerations and Challenges}
+
+Integrating mechanical, electrical, and computational subsystems into a cohesive thrust-vector-controlled vehicle presents significant engineering challenges. The reliability of the rocket depends not only on the performance of individual components but also on their interaction under conditions of high acceleration, vibration, and thermal stress.
+
+Thermal protection was a primary concern due to the proximity of avionics to the solid rocket motor. Exhaust gases and particulate matter generated during combustion pose a risk to electronic components. To mitigate this, the motor was positioned within the airframe such that its exhaust plume was directed away from sensitive structures, and a lightweight 3D-printed PLA shield wrapped in aluminum foil was installed to provide thermal isolation.
+
+Vibration posed another significant challenge, particularly for inertial sensors. High-frequency oscillations can introduce noise into IMU measurements and degrade attitude estimation. To address this, the IMU was mounted using rubber isolation to attenuate vibration, while the gimbal mount and avionics bay were reinforced with cross-braced supports to reduce torsional flexing. Wiring harnesses were secured using adhesive and strain relief to prevent movement during launch.
+
+Maintaining alignment between the center of mass (CoM) and center of thrust (CoT) is critical in thrust-vector-controlled systems. Even small offsets can introduce unwanted coupling effects that reduce control effectiveness. The CoM was determined experimentally using a balance method with the fully assembled rocket, including the motor. This measurement was supplemented with a method-of-moments calculation based on individual component masses and positions to increase confidence in the result. The equation for calculating the moments was derived from the standard center-of-mass relation:
+\[
+x_{CoM} = \frac{\sum_i x_i m_i}{\sum_i m_i}
+\]
+Because weight is simply mass scaled by the local gravitational acceleration $g$ (i.e., $W_i = m_i g$), the same relation can equivalently be expressed in terms of measured component weights, with $g$ cancelling from numerator and denominator:
+\[
+x_{CoM} = \frac{\sum_i x_i W_i}{\sum_i W_i}
+\]
+where $W_i$ is the $i$-th component's weight and $x_i$ is its distance from the fixed reference point. This equivalence allowed the balance-test measurement, which directly measures weight, to be cross-checked against the method-of-moments calculation based on component masses, increasing confidence in the result.
+
+The center of pressure (CoP) was estimated using OpenRocket \cite{openrocket2023} simulation software, which applies the Barrowman equations \cite{barrowman1967} to model aerodynamic forces on slender bodies. Center of pressure is governed by the equation:
+\[
+x_{CoP} = \frac{\sum_i C_{N_i} x_i}{\sum_i C_{N_i}}
+\]
+where $C_{N_i}$ is the normal force coefficient for each section, and $x_i$ represents its axial distance from the nose tip. The final configuration showed the CoP positioned approximately 80 mm ahead of the CoM, consistent with the divergently unstable, finless configuration described in Section 2.5: with no aerodynamic surfaces to generate a restoring moment, the vehicle's aerodynamic moment grows with tilt rather than opposing it. OpenRocket's output provided both a numerical CoP location and an estimated margin given by:
+\[
+\text{Static Margin} = \frac{x_{CoP} - x_{CoM}}{D}
+\]
+where $D$ is the rocket body diameter (76 mm in this design) and $x$ is measured from the nose tip, increasing toward the tail. With the CoP ahead of (i.e., at a smaller $x$ than) the CoM, this expression yields a negative static margin, the expected and intended signature of an unstable, finless airframe. Propellant burn during powered flight causes the CoM to shift forward as mass is consumed from the aft motor, narrowing the CoP\textendash CoM gap and modestly reducing the magnitude of the instability over the course of the burn, though the configuration remains aerodynamically unstable throughout powered flight. Maintaining adequate thrust-vector control authority relative to this instability, rather than seeking a stable aerodynamic configuration, was therefore essential to flight stability: Section 3.4 quantifies the tilt angle beyond which the TVC system's corrective torque can no longer overcome this destabilizing aerodynamic moment.
+
+With the structural, aerodynamic, and electronic foundations established, the next phase of the project was centered on developing the closed-loop control system responsible for maintaining rocket stability during powered flight. These physical and simulated findings directly informed the PID tuning process and the Kalman filter parameters, ensuring that the control inputs were responsive and accurate during rapidly changing acceleration and vibrations. The following section details the mathematical framework, algorithmic implementation, and practical tuning procedures that governed the TVC’s behavior in real time.
+
+
+

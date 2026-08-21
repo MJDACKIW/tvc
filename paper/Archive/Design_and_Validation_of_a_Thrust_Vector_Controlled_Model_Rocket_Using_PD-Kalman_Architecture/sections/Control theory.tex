@@ -1,0 +1,186 @@
+\section{Control Theory and PID Stabilization}
+\label{sec:control}
+
+TVC requires real-time orientation correction to counteract disturbances such as wind, manufacturing tolerances, or uneven thrust. This is achieved through a closed-loop control system that combines an IMU, a Kalman filter, and a dual-axis PID controller, continuously adjusting the angle of the motor to correct pitch and yaw deviations.
+
+
+\subsection{Orientation Control using PID}
+\label{subsec:pid}
+
+At the core of the TVC system is a Proportional--Integral--Derivative (PID) controller, which stabilizes the rocket by adjusting the motor's deflection angle in real time. The controller opposes any external force that pushes the rocket away from a vertical attitude ($0^\circ$ tilt), keeping the thrust aligned with the rocket's center of mass. It does this by minimizing the angular error between the desired vertical orientation and the rocket's measured tilt, using attitude data derived from the IMU. Pitch and yaw are stabilized independently: each axis is treated as a separate control loop, with its own error signal, feedback, and correction command sent to the servo motors.
+
+The PID control law is:
+
+\[
+u(t) = K_p\,e(t) + K_i \int_0^t e(\tau)\,d\tau + K_d\,\frac{de(t)}{dt}
+\]
+
+where:
+
+\begin{itemize}
+    \item $u(t)$: the control output, i.e.\ the commanded servo deflection angle.
+    \item $e(t)$: the angular error at time $t$, defined as the difference between the measured attitude and the nominal vertical orientation of $0^\circ$.
+    \item $K_p,\ K_i,\ K_d$: the tuned proportional, integral, and derivative gains, respectively.
+\end{itemize}
+
+Each term performs a distinct role. The proportional term ($K_p$) applies a correction in direct proportion to the current angular error, providing the immediate response to a deviation; if it is set too high, however, it can drive the system into oscillation. The integral term ($K_i$) accumulates the error over time and removes any steady-state offset, ensuring the rocket returns to exactly vertical rather than settling at a small persistent tilt; an overly large integral gain can cause overshoot or slow oscillatory drift. The derivative term ($K_d$) responds to the rate at which the error is changing, anticipating where the error is heading and damping the response before it overshoots. This improves stability, but because it acts on the rate of change of a noisy signal, an excessive derivative gain amplifies measurement noise, which is a particular concern given that IMU data is inherently noisy.
+For the validation simulations presented in Section 6, the integral term was set to zero ($K_i = 0$). Over a burn lasting only a few seconds, the steady-state-error correction the integral term provides is of limited benefit, while the windup risk described above is a genuine concern for a fast, short-duration burn; the simulated controller therefore operates as a pure PD loop. The full PID control law, including integral action and the windup protection described in Appendix A.3, remains implemented in the flight software for use in flight regimes (e.g., longer burns or coast-phase corrections) where steady-state offset correction is more beneficial.
+Tuning these three gains requires iterative ground and simulated testing to reach stability without excessive oscillation. Initial values can be estimated using the Ziegler--Nichols heuristic method \cite{ziegler1942}. That method is deliberately aggressive and tends to produce high gains, which is not suitable for a vehicle that requires stability and minimal overshoot. These initial values were therefore treated only as a starting point and refined empirically through static-fire testing, confirming that servo commands stayed within their actuation limits and that oscillation was minimized during rapid attitude correction.
+
+The PID model has an important limitation: it assumes a linear relationship between the input (servo commands) and the output (angular deflection). During powered flight this relationship is in fact nonlinear, owing to aerodynamic effects, a center of mass that shifts as propellant burns, and particularly the time-varying thrust curve of a solid rocket motor. To keep these nonlinearities from destabilizing the loop, the derivative term can be tuned conservatively, and integral windup protection can be applied so that error does not continue to accumulate once the gimbal has reached its maximum deflection.
+
+
+
+
+\subsection{Sensor Fusion using a Kalman Filter}
+\label{subsec:kalman}
+ 
+The control loop depends on an accurate, real-time estimate of the rocket's orientation, yet neither sensor on the MPU-6050 can provide one on its own. The gyroscope measures angular velocity, which is accurate over short intervals; orientation, however, is obtained by integrating (continuously summing) that velocity over time, so small measurement errors accumulate and the estimate gradually drifts. The accelerometer measures the direction of gravity and therefore provides an absolute reference for the rocket's tilt, but during powered flight its readings are corrupted by the vibration and acceleration produced by the motor. Each sensor is reliable precisely where the other is weak: the gyroscope over short timescales, the accelerometer over long ones. A Kalman filter \cite{kalman1960} combines the two into a single orientation estimate that is more reliable than either sensor alone.
+ 
+Before stating the filter equations, it is worth fixing the notation, since the subscripts carry specific meaning. The integer $k$ labels the current control cycle, and $k-1$ the previous one. A caret denotes an \emph{estimate} rather than a measured or true value, so $\hat{x}$ is the filter's estimate of the tilt angle. A subscript written as $k|k-1$ is read as ``the value at step $k$ given only the information available through step $k-1$'': it is therefore a prediction, formed before the new measurement at step $k$ is taken into account. Finally, because each axis (pitch and yaw) is estimated independently as a single tilt angle, every quantity below is a single number rather than a matrix, which simplifies the standard Kalman expressions.
+ 
+Each cycle proceeds in two steps. In the \textbf{prediction} step, the filter advances its previous orientation estimate using the angular velocity reported by the gyroscope:
+ 
+\[
+\hat{x}_{k|k-1} = \hat{x}_{k-1} + \omega_k\,\Delta t
+\]
+ 
+where $\hat{x}_{k-1}$ is the orientation estimate carried over from the previous cycle, $\omega_k$ is the angular velocity measured by the gyroscope during the current cycle, $\Delta t$ is the time elapsed since the previous cycle, and $\hat{x}_{k|k-1}$ is the resulting predicted orientation, before any correction. Put simply, the new angle is the previous angle plus the amount the rocket is estimated to have rotated since the last update.
+ 
+In the \textbf{update} step, the filter corrects this prediction using the accelerometer, weighting the correction by how much it currently trusts that reading:
+ 
+\[
+\hat{x}_k = \hat{x}_{k|k-1} + K_k\left(z_k - H\hat{x}_{k|k-1}\right)
+\]
+ 
+where $z_k$ is the tilt angle derived from the accelerometer during the current cycle, $\hat{x}_k$ is the final, corrected orientation estimate for the cycle, $K_k$ is the Kalman gain (defined below), and $H$ is the observation model, which relates the estimated state to the measured quantity. Because the filter estimates exactly the tilt angle that the accelerometer reports, $H$ equals $1$ in this implementation and can effectively be ignored. The term in parentheses, $z_k - H\hat{x}_{k|k-1}$, is the difference between what the accelerometer measures and what the prediction expected, and it serves as the filter's error signal for the current cycle.
+ 
+The Kalman gain $K_k$ determines how strongly that correction is applied: a large gain pulls the estimate toward the accelerometer, while a small gain leaves it close to the gyroscope-based prediction. The gain is not fixed but is recomputed every cycle from the filter's own estimate of its uncertainty:
+ 
+\[
+K_k = \frac{P_{k|k-1}H^{T}}{H P_{k|k-1} H^{T} + R}
+\]
+ 
+Here $P_{k|k-1}$ is the \emph{predicted error covariance} --- the filter's uncertainty about its own prediction --- and $R$ is the \emph{measurement noise covariance}, a fixed value representing how noisy the accelerometer is expected to be. Both are variances: single numbers, in units of angle squared, where a larger value simply means greater uncertainty. The superscript $T$ denotes the matrix transpose used in the general formulation; since $H = 1$ here, $H$ and $H^{T}$ drop out and the gain reduces to the more transparent form
+ 
+\[
+K_k = \frac{P_{k|k-1}}{P_{k|k-1} + R}
+\]
+ 
+In this form the behavior of the gain is clear. The predicted uncertainty $P_{k|k-1}$ and the accelerometer noise $R$ compete in the denominator, and the gain always falls between $0$ and $1$. When the accelerometer is reliable relative to the prediction, $R$ is small, the gain approaches $1$, and the measurement is trusted heavily; when vibration makes the accelerometer unreliable, $R$ is effectively large, the gain approaches $0$, and the filter relies on the gyroscope-based prediction instead.
+ 
+The gain can adapt in this way only because the uncertainty $P$ is itself updated every cycle, in two steps that mirror the orientation update. During prediction, integrating the gyroscope adds uncertainty, so $P$ grows by the process noise $Q$:
+ 
+\[
+P_{k|k-1} = P_{k-1} + Q
+\]
+ 
+where $P_{k-1}$ is the uncertainty carried over from the previous cycle and $Q$ is a fixed value representing the error the gyroscope introduces each step. After the accelerometer correction is applied, the uncertainty shrinks:
+ 
+\[
+P_k = \left(1 - K_k H\right) P_{k|k-1}
+\]
+ 
+where $P_k$ is the updated uncertainty passed forward to the next cycle (again with $H = 1$, so the factor is simply $1 - K_k$). Taken together, the two orientation equations and these two covariance equations form a single self-correcting cycle: at every step the filter predicts the new orientation and its uncertainty, measures the disagreement with the accelerometer, and corrects both.
+ 
+The two fixed quantities $Q$ and $R$ are what the filter is tuned on, and only their relative size matters. A larger $Q$ tells the filter that its gyroscope-based prediction is less trustworthy, which raises the gain and pulls the estimate toward the accelerometer; a larger $R$ does the opposite, favoring the smoother prediction. For this vehicle, the two were chosen so that the estimate stayed responsive during rapid attitude changes without amplifying the accelerometer's vibration noise.
+ 
+The result is a smooth orientation estimate that suppresses both the short-term vibration noise of the accelerometer and the long-term drift of the gyroscope, and it is this estimate that the PID controller acts on. One limitation follows directly from the sensor suite: the accelerometer can only sense tilt away from vertical, which fixes the pitch and yaw axes, but it carries no information about rotation about the rocket's longitudinal axis. Because the MPU-6050 has no magnetometer to supply an absolute heading reference \cite{invensense_mpu6050}, that rotation (roll) is tracked by the gyroscope alone and slowly drifts. For the short, vertical, and approximately symmetric flights considered here, uncorrected roll does not affect the rocket's ability to maintain a vertical trajectory, so a magnetometer was not included in the design.
+ 
+In simulation, using the MPU-6050's datasheet noise characteristics (Section~6.7), the filter reduced instantaneous tilt noise by roughly 70--80\%, which in turn improved the accuracy and responsiveness of the downstream PID loop.
+
+\subsection{Stability Constraints and PID Gain Tuning Methodology}
+\label{subsec:tuning}
+
+Designing a closed-loop control system for a thrust-vector-controlled rocket required careful attention to both control authority and physical response constraints. The controller's ability to stabilize the vehicle depended not only on well-tuned gains but also on the mechanical, aerodynamic, and computational limits of the components selected for this project.
+
+The most significant of these constraints was the servo response speed relative to the rate at which the rocket's instability grows. The MG90S servos used in the gimbal have a rated actuation speed of roughly $0.12$~s per $60^\circ$ of travel \cite{towerpro_mg90s}. A full deflection therefore takes on the order of a tenth of a second, which corresponds to an effective control bandwidth of about $8$--$10$~Hz (since $1/0.12~\text{s} \approx 8$ actuations per second). The control loop on the Teensy 4.1 microcontroller was run at $150$~Hz, far above this actuator bandwidth, so that the controller could detect and begin responding to a deviation well before the servo itself became the limiting factor, preventing small errors from propagating into larger oscillations.
+
+The control authority of the system, defined as the total corrective torque available from gimbal deflection, is set by the motor thrust and the moment arm between the thrust line and the center of mass. The corrective moment is:
+
+\[
+\tau = F_T \cdot r \cdot \sin\delta
+\]
+
+where $F_T$ is the instantaneous motor thrust, $r$ is the distance from the center of mass to the gimbal pivot, and $\delta$ is the gimbal deflection angle. Because torque scales with $\sin\delta$ and the gimbal's range is limited to $\pm 10^\circ$, the maximum corrective torque is bounded by that mechanical range. The PID deflection commands were therefore constrained to the same $\pm 10^\circ$ window, since the controller cannot be allowed to request a correction the gimbal cannot physically produce. Commanding more deflection than the hardware can deliver is known as actuator saturation, and limiting the control output prevents it. At the motor's peak thrust of $33.0$~N (Section~6.2), this corresponds to the largest restoring moment the vehicle can generate, a figure quantified across the full burn in Section~6.8.
+
+
+\subsection{Limits of Control Authority and Tilt Recovery}
+\label{subsec:authority}
+
+The ability of a thrust-vector-controlled rocket to maintain or recover stable flight depends fundamentally on its control authority: the total corrective torque the TVC mechanism can supply relative to the rate at which angular disturbances grow. Once the disturbance exceeds what the control mechanism can counter, the rocket can no longer return to vertical, and the result is a loss of stability and a potential uncontrolled failure. This authority is bounded by several factors acting together: servo speed, motor thrust characteristics, aerodynamic forces, structural geometry, and sensor latency. The following subsections examine these limits in detail and define the theoretical maximum recoverable tilt angle.
+
+The rotational motion of the rocket about its center of mass is governed by Newton's second law for rotation,
+
+\[
+I\,\ddot{\theta} = \tau_{\mathrm{net}}
+\]
+
+where $I$ is the rocket's moment of inertia about the pitch (or yaw) axis, $\theta$ is the tilt angle from vertical, $\ddot{\theta}$ is the resulting angular acceleration, and $\tau_{\mathrm{net}}$ is the sum of all torques acting on the vehicle. That net torque is the difference between the corrective torque supplied by the gimbal and the disturbance torque that drives the rocket away from vertical:
+
+\[
+I\,\ddot{\theta} = \tau_{\mathrm{control}} - \tau_{\mathrm{dist}}(\theta)
+\]
+
+Recovering or holding a stable attitude means keeping $\ddot{\theta}$ directed back toward vertical, which requires the corrective torque to match or exceed the disturbance across the range of tilts the rocket actually reaches. This relationship is the foundation of the analysis that follows: the corrective torque is bounded above by the gimbal's mechanical limit (Section~\ref{subsubsec:torque_limit}), the disturbance torque grows with tilt (Section~\ref{subsubsec:max_tilt}), and the angle at which the two become equal marks the edge of recoverable flight.
+
+\subsubsection{Corrective Torque Limitations}
+\label{subsubsec:torque_limit}
+The total corrective torque generated by the TVC system is set by the motor thrust, the offset between the gimbal and the center of mass, and the gimbal's maximum deflection angle:
+
+\[
+\tau_{\max} = F_T \cdot r \cdot \sin(\delta_{\max})
+\]
+
+where:
+
+\begin{itemize}
+    \item $F_T$ is the motor thrust.
+    \item $r$ is the distance from the center of mass to the gimbal pivot.
+    \item $\delta_{\max}$ is the maximum gimbal deflection angle.
+\end{itemize}
+This equation captures the first hard limit of the system. Because $\delta_{\max}$ is fixed by the gimbal's mechanical range, the corrective torque the vehicle can generate at a given thrust is also fixed. As the rocket tilts farther from vertical, it requires progressively more torque to counteract the gravitational and aerodynamic moments acting on it. Once the disturbance torque exceeds $\tau_{\max}$, recovery becomes impossible, no matter how precisely the PID controller is tuned.
+
+\subsubsection{Maximum Recoverable Tilt Angle}
+\label{subsubsec:max_tilt}
+The maximum recoverable tilt angle is the largest angular deviation from vertical from which the TVC system can still return the rocket to a stable orientation during powered flight. It is found by comparing the maximum corrective torque available from thrust vectoring against the combined disturbance torques acting on the vehicle. 
+
+The dominant disturbance for this analysis is the destabilizing aerodynamic moment, which grows with angle of attack and airspeed. Two terms that might appear to belong here do not: gravity acts through the vehicle's center of mass and therefore produces no net moment about that point, and the $I\ddot{\theta}$ term in Newton's second law for rotation is the system's own inertial response to net torque, not an independent disturbance. At small tilt angles, the aerodynamic torque scales approximately linearly with the tilt.
+
+At small tilt angles, the aerodynamic and gravitational torques scale approximately linearly with the tilt. As the tilt increases, however, these moments grow faster than the available corrective torque, which is capped by the fixed gimbal limit. Once the disturbance torque exceeds the maximum corrective torque defined in Section~\ref{subsubsec:torque_limit}, recovery is no longer possible even with thrust still available. This defines a recovery boundary:
+
+\[
+\tau_{\mathrm{dist}}(\theta) \leq \tau_{\max}
+\]
+
+where $\theta$ is the rocket's tilt angle from vertical. Beyond this boundary the system diverges: further corrective commands can no longer generate enough angular acceleration to reverse the motion. In practical terms, there is a finite tilt angle within which the rocket can still be brought back to vertical, and past it the flight becomes unrecoverable. To make this boundary concrete, the disturbance torque must be written in terms of the tilt angle. For the finless configuration the dominant disturbance is aerodynamic: with the center of pressure ahead of the center of mass, any tilt produces a destabilizing moment about the center of mass. For a near-vertical trajectory the tilt angle and the aerodynamic angle of attack are approximately equal, and at small angles the aerodynamic normal force is
+
+\[
+N \approx \tfrac{1}{2}\rho v^{2} A_{\mathrm{ref}} C_{N\alpha}\,\theta
+\]
+
+where $\rho$ is the air density, $v$ is the airspeed, $A_{\mathrm{ref}}$ is the reference cross-sectional area, and $C_{N\alpha}$ is the slope of the normal-force coefficient, obtained from the Barrowman method \cite{barrowman1967}. This force acts at the center of pressure, a distance $\ell = x_{\mathrm{CoP}} - x_{\mathrm{CoM}}$ from the center of mass, so the disturbance torque is
+
+\[
+\tau_{\mathrm{dist}}(\theta) \approx \tfrac{1}{2}\rho v^{2} A_{\mathrm{ref}} C_{N\alpha}\,\ell\,\theta
+\]
+
+Setting this equal to the maximum corrective torque from Section~\ref{subsubsec:torque_limit} and solving for the tilt gives the maximum recoverable angle:
+
+\[
+\theta_{\max} \approx \frac{F_T\, r \sin(\delta_{\max})}{\tfrac{1}{2}\rho v^{2} A_{\mathrm{ref}} C_{N\alpha}\,\ell}
+\]
+
+This form makes the dependence clear: the recoverable tilt rises with motor thrust $F_T$ and falls as airspeed increases, since the aerodynamic disturbance scales with $v^{2}$. The rocket is therefore easiest to recover early in the burn, when thrust is high and airspeed is still low, and progressively harder to recover as thrust decays and dynamic pressure builds.
+
+Evaluated with this vehicle's parameters, the boundary is consistent with the results of simulation and analysis, which indicated that stable recovery was consistently achievable for pitch and yaw deviations below approximately $12^\circ$ and matched the $12^\circ$--$15^\circ$ envelope mapped numerically in Section~\ref{subsec:controllability_boundary}. This value is slightly larger than the mechanical gimbal limit of $\pm 10^\circ$ because recovery depends on angular acceleration applied over time, not on deflection angle alone.
+
+
+\subsubsection{Dynamic Effects and Control Latency}
+\label{subsubsec:latency}
+
+Beyond the static torque limit, tilt recovery is also constrained by dynamic effects: control latency, actuator response speed, and sensor update rate. Even when sufficient corrective torque exists in principle, delays in any of these can allow an angular deviation to grow past the recoverable limit before the correction is fully applied. In an ideal system this delay would be zero, but in practice even a few milliseconds of lag can cause the controller to overcorrect or undercorrect.
+
+The MG90S servos have a finite response time of roughly $0.12$~s per $60^\circ$ of motion, which limits how quickly the thrust vector can be redirected against a sudden disturbance. If the rocket experiences a rapid tip-off immediately after launch, as lightweight vehicles often do, the servo response can lag the disturbance, allowing angular velocity to build faster than the system can arrest it. Sensor processing adds a smaller delay of its own: although the IMU reports data frequently, the Kalman filter smooths rapid jumps in that data to reject noise, which introduces a small but unavoidable phase lag in the attitude estimate. This trade-off improves stability under vibration at the cost of some responsiveness to very fast disturbances.
+
+Together, these effects impose a dynamic recovery limit, one where recovery fails not because the available torque is insufficient, but because the correction arrives too late. Two design choices mitigate this risk: selecting conservative PID gains that prioritize stability and predictability over aggressive correction, and running the control loop well above the actuator bandwidth to minimize computational delay and issue corrective commands as early as possible. Taken together, the static and dynamic limits define a specific, calculable domain of controllability within which stable flight and recovery are possible. Characterizing this domain was essential both to the mechanical design of the gimbal and to the tuning of the closed-loop control algorithm.

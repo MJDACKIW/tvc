@@ -1,0 +1,113 @@
+\documentclass[11pt, letterpaper]{article}
+
+% --- Encoding and Fonts ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{gensymb}
+
+% --- Page Layout & Spacing ---
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\setstretch{1.15}
+\usepackage{parskip}
+\usepackage{enumitem}
+\setlist[itemize]{noitemsep, topsep=5pt}
+\usepackage{placeins}
+
+% --- Graphics & Tables ---
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[font=small,labelfont=bf]{caption}
+
+% --- Code Listings ---
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+    backgroundcolor=\color{gray!10},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70},
+    stringstyle=\color{orange!80!black},
+    commentstyle=\color{green!50!black}\itshape,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    tabsize=4,
+    showstringspaces=false
+}
+
+% --- References and Links ---
+\usepackage{cite}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    filecolor=magenta,
+    urlcolor=blue,
+    citecolor=blue,
+    pdftitle={TVC Rocket Design - Marc Julian Dackiw},
+    pdfpagemode=FullScreen,
+}
+
+% --- Document Metadata ---
+\title{Design and Validation of a Thrust Vector Controlled Model Rocket Using PD-Kalman Architecture}
+\author{Marc Julian Dackiw}
+\date{January 29, 2026}
+
+\begin{document}
+
+% --- Custom Title Page ---
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+
+    {\Huge \textbf{Design and Validation of a Thrust Vector Controlled Model Rocket Using PID-Kalman Architecture}}
+
+    \vspace{1.5cm}
+
+    {\Large \textbf{Marc Julian Dackiw}}
+
+    \vspace{1cm}
+
+    {\large Flint Hill School}
+
+    \vfill
+
+    {\Large \today}
+
+\end{titlepage}
+
+% --- Front Matter ---
+\pagenumbering{roman}
+
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+\input{sections/Abstract.tex}
+
+\newpage
+\tableofcontents
+\newpage
+
+% --- Main Content ---
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{sections/Introduction}
+\input{sections/System Architecture Overview}
+\input{sections/Control theory}
+\input{sections/Flight Software and Autonomous State Transitions}
+\input{sections/Simulations and Performance Modeling}
+\input{sections/Simulation-Based Validation}
+\input{sections/Conclusion and Future Work}
+
+% --- Appendix & Bibliography ---
+\newpage
+\appendix
+\input{sections/Appendix A}
+
+\newpage
+\bibliographystyle{ieeetr}
+\bibliography{sections/references}
+\end{document}

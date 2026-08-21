@@ -1,0 +1,170 @@
+\section{Flight Software Implementation Details}
+\label{sec:appendix_a}
+
+This appendix provides supporting technical material referenced throughout the paper, including
+flight software logic, control algorithms, and simulation implementations. These materials are
+included to improve reproducibility, transparency, and technical completeness while preserving
+the flow and readability of the main body.
+
+All code presented here was developed specifically for this project and executed on the same
+computational and hardware platforms described in Sections~2--6.
+
+% -----------------------------------------------------------------------
+\subsection{State Machine Architecture Overview}
+\label{subsec:app_statemachine}
+
+\begin{lstlisting}[language=Python, caption={High-level autonomous flight state machine.},
+                   label=lst:statemachine]
+if state == "Pad Idle":
+    if accel_z > launch_threshold:
+        state = "Powered Flight"
+
+elif state == "Powered Flight":
+    if vertical_velocity < 0 and time_since_launch > 0.75:
+        state = "Apogee Detection"
+
+elif state == "Apogee Detection":
+    if velocity_magnitude < descent_threshold:
+        state = "Descent"
+
+elif state == "Descent":
+    if altitude < safe_altitude:
+        state = "Recovery"
+
+elif state == "Recovery":
+    if impact_detected:
+        state = "Post-landing"
+\end{lstlisting}
+
+While simplified for clarity, this structure captures the core decision-making framework described
+in Section~4. Additional safeguards, timeouts, and fault-handling logic are implemented in parallel
+to prevent unsafe or undefined state transitions.
+
+% -----------------------------------------------------------------------
+\subsection{Apogee Detection Logic}
+\label{subsec:app_apogee}
+
+Apogee detection is implemented using a multi-condition logic approach designed to reduce
+susceptibility to noise, transient oscillations, and sensor bias. Rather than relying on a single
+zero-crossing of vertical velocity, the algorithm evaluates sustained trends across multiple sensor
+channels.
+
+\begin{lstlisting}[language=Python, caption={Multi-condition apogee detection algorithm.},
+                   label=lst:apogee]
+if vertical_velocity < negative_threshold for > 150 ms
+   and altitude_rate < epsilon for > 300 ms
+   and time_since_launch > 0.75 s
+   and abs(pitch) < 15 deg and abs(yaw) < 15 deg:
+       apogee_detected = True
+\end{lstlisting}
+
+A timeout safeguard forces a transition into descent mode if apogee is not detected within a
+predefined maximum flight time. This ensures recovery logic is still executed in the event of
+unexpected sensor failure or extreme flight deviation.
+
+% -----------------------------------------------------------------------
+\subsection{Discrete-Time PID Control Law}
+\label{subsec:app_pid}
+
+The PID control system operates independently on pitch and yaw axes using identical control structures. Each loop consumes filtered attitude estimates from the Kalman filter and outputs a commanded gimbal deflection angle. For the simulation results presented in Section 6, $K_i$ was set to zero, so the simulated controller operated as a PD loop (Section 3.1); the integral term and its associated windup protection, shown below, remain implemented in the flight software for use in other flight regimes.
+
+\begin{lstlisting}[language=Python, caption={Discrete-time PID update law implemented on the flight computer.},
+                   label=lst:pid]
+error = desired_angle - measured_angle
+integral += error * dt
+derivative = (error - previous_error) / dt
+
+output = Kp * error + Ki * integral + Kd * derivative
+output = constrain(output, -max_deflection, max_deflection)
+
+previous_error = error
+\end{lstlisting}
+
+Integral windup protection is enforced by limiting the accumulated integral term when the actuator
+saturates. This prevents excessive overshoot during recovery from large disturbances, as discussed
+in Section~3.4.
+
+% -----------------------------------------------------------------------
+\subsection{Kalman Filter for Attitude Estimation}
+\label{subsec:app_kalman}
+
+Attitude estimation is performed using a discrete Kalman filter that fuses gyroscope angular
+velocity data with accelerometer-based tilt estimates. The filter mitigates high-frequency noise
+from vibration while correcting for long-term gyro drift. 
+The prediction and update equations implemented in software follow the scalar Kalman formulation described in Section 3.2 directly; because each axis (pitch and yaw) is treated as an independent one-dimensional filter, no matrix algebra is required in the implementation.
+
+% -----------------------------------------------------------------------
+\subsection{Simulation Code and Plot Generation}
+\label{subsec:app_simcode}
+
+All simulations presented in Section~6 were generated using Python~3 and the Matplotlib and NumPy
+libraries. Simulations were executed on a local development environment using Visual Studio Code.
+The simulation environment assumes a rigid-body model; therefore, structural flex and aeroelastic
+effects are not factored into the numerical integration.
+
+The following simulation cases are included:
+
+\begin{itemize}
+    \item Motor thrust curve (E12-4, NAR-certified data)
+    \item Baseline closed-loop response (pitch angle, angular rate, gimbal deflection)
+    \item Open-loop vs.\ closed-loop comparison
+    \item Disturbance rejection response
+    \item Control effort: commanded vs.\ achieved gimbal deflection
+    \item Kalman filter performance vs.\ raw accelerometer
+    \item TVC corrective torque authority vs.\ time
+    \item Parametric sensitivity analysis (thrust, CoM offset, gimbal angle)
+    \item Controllability boundary map
+    \item Two-axis Monte Carlo simulation with randomized initial conditions
+\end{itemize}
+
+Each simulation shares a common structure: (1) definition of vehicle parameters, (2) numerical
+integration of rotational dynamics via RK4, (3) PID-based control input calculation at 150~Hz,
+(4) optional disturbance injection, and (5) data logging and figure generation. Figures are
+referenced directly in Section~6 and labeled consistently with their corresponding filenames.
+
+% -----------------------------------------------------------------------
+\subsection{Code Availability and Reproducibility}
+\label{subsec:app_code}
+
+To support reproducibility and future development, all flight software and simulation code are
+provided in a public GitHub repository. This repository includes embedded flight software source
+files, Python simulation scripts, plot generation utilities, and configuration files.
+
+\url{https://github.com/MJDACKIW/Design_and_Validation_of_a_Thrust_Vector_Controlled_Model_Rocket_Using_PID-Kalman_Architecture/tree/main}
+
+% -----------------------------------------------------------------------
+\subsection{Technical Disclaimers and Simulation Assumptions}
+\label{subsec:app_disclaimers}
+
+This section outlines the physical simplifications and hardware constraints assumed during the
+design, control law development, and simulation of the TVC system. Acknowledging these factors
+is essential for evaluating the performance envelope and real-world reliability of the vehicle.
+
+\subsubsection{Rigid-Body Dynamics Assumption}
+
+All simulations in Section~6 treat the rocket airframe as a perfectly rigid body. In practice,
+aeroelasticity - where the airframe flexes under aerodynamic and inertial loads - can introduce
+high-frequency noise into IMU data, potentially leading to control-loop instability if the
+structural resonance frequency approaches the PID sampling frequency. These structural-control
+interactions are not modeled in the current numerical integration.
+
+\subsubsection{Sensor Limitations and Roll Drift}
+\label{subsubsec:sensor_limits}
+
+The avionics suite utilizes the MPU-6050 \cite{invensense_mpu6050}, which lacks an onboard magnetometer. Consequently, the Kalman filter provides high-fidelity state estimation for pitch and yaw\textemdash the two axes the accelerometer can reference against gravity\textemdash but cannot reference an absolute magnetic heading for the roll axis. While the PID algorithm actively stabilizes the vehicle's pitch and yaw, roll (rotation about the rocket's long axis) is subject to uncorrected gyroscopic drift. For the intended short-duration motor burns (2\textendash5 seconds), this drift is considered negligible for maintaining flight stability, since roll has no effect on the vehicle's ability to maintain a vertical trajectory, though it precludes precise heading-based navigation.
+
+\subsubsection{Aerodynamic Instability (Finless Configuration)}
+
+The decision to omit passive aerodynamic fins renders the vehicle inherently unstable, with the
+center of pressure ($CoP$) located forward of the center of mass ($CoM$). This creates a
+continuous inverted-pendulum scenario. The system's stability is entirely dependent on the active
+control loop and the gimbal's ability to maintain thrust-vector alignment with the vehicle axis.
+Any failure in the control software or mechanical gimbal response during the boost phase will
+result in immediate aerodynamic divergence.
+
+\subsubsection{Environmental Constants}
+
+Simulations assume a standard atmospheric model with constant air density at sea level. Variable
+wind shear, localized turbulence, and the change in atmospheric pressure with altitude are not
+factored into the disturbance rejection models. These factors may introduce additional
+non-linearities during actual flight trials.

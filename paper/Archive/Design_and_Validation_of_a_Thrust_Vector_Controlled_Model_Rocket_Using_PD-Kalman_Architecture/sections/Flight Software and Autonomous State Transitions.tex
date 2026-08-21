@@ -1,0 +1,69 @@
+\section{Flight Software and Autonomous State Transitions}
+
+The flight software serves as the layer that governs when the control system is enabled, how sensor data is interpreted, and how the system transitions between distinct phases of flight. While the thrust vector control system defines how correction actions are computed, the flight software determines when such corrections are physically necessary and safe to apply. For this project, an autonomous state-machine-based architecture was implemented to ensure data-backed behavior, robustness that protects against sensor noise, and safe transitions between powered and unpowered flight. 
+The software executes on a Teensy 4.1 microcontroller as a high-frequency loop ($\sim$200 Hz). Within this loop, the PD/PID computation and Kalman filter update specifically execute at 150 Hz, matching the control update rate used in the validation simulations of Section 6, while sensor sampling, state-machine evaluation, and data logging proceed at the full loop rate.
+
+
+\subsection{Autonomous Staging and Flight Phase Identification}
+At the core of the flight software lies the autonomous staging system, responsible for identifying the rocket’s current phase of flight based on real-time sensor data. This system evaluates accelerometer, gyroscope, and derived kinematic quantities to determine whether the rocket is idle, undergoing powered ascent, coasting, descending, or has completed flight. Each flight phase corresponds to a unique control context, ensuring that thrust vector corrections are applied only when thrust is available and that recovery logic is activated at the appropriate moment.
+Rather than relying on a single sensor or threshold, the staging logic evaluates multiple indicators simultaneously. This multi-parameter approach improves robustness against noise, vibration, and transient disturbances, particularly during high-dynamic events such as launch and motor burnout. The overall staging logic follows the structure illustrated in Figure A1, which outlines the transitions between flight states.
+
+
+\subsection{State Machine Logic and Execution Flow}
+
+The flight software is structured as a state machine operating within a continuous control loop. During each iteration of the loop, current sensor measurements are processed and compared against state-dependent transition criteria. The system begins in a pad idle state, during which the rocket is stationary and awaiting launch. In this state, sensor calibration is completed, baseline offsets are established, and all actuators are held in neutral positions to prevent unintended motion.
+
+Upon detection of launch conditions, the system transitions into the powered flight state. In this phase, thrust vector control is fully enabled, and the PD controller actively stabilizes pitch and yaw using Kalman-filtered attitude estimates. The powered flight state persists until motor burnout and upward velocity decay are detected, at which point the software transitions into an apogee detection state. This intermediate state allows the system to distinguish between transient velocity fluctuations and the true apex of the trajectory.
+
+Once apogee is confirmed, the system enters the descent state. During descent, active thrust vector control is disabled, as thrust is no longer available to generate corrective torque. The final transition occurs after landing is detected, at which point the system enters a recovery or post-landing state where data logging is finalized and active control subsystems are powered down.
+
+This state-based execution model ensures that control logic is always context-aware and prevents undesired actuation when it is not required or will not have a meaningful effect on controlling the rocket’s trajectory.
+
+
+
+\subsection{Sensor Inputs, Calibration, and Filtering}
+Reliable autonomous decision-making depends on accurate and stable sensor data. The rocket employs a six-degree-of-freedom MPU-6050 inertial measurement unit, providing three-axis accelerometer and gyroscope measurements. While these sensors offer high sampling rates and low latency, their raw outputs are susceptible to bias, drift, and vibration-induced noise. 
+Gyroscopes measure angular velocity and therefore accumulate integration error over time, leading to gradual drift in estimated orientation. Accelerometers, while capable of providing absolute tilt references, are sensitive to high-frequency vibration and non-gravitational accelerations during powered flight. To address these limitations, sensor calibration routines can be performed prior to launch to remove static offsets and real-time filtering is applied during flight.
+Filtered sensor data is then passed to the Kalman filter described in Section 3.2, producing a smooth and reliable estimate of the rocket’s orientation. This filtered attitude estimate is used both for control input during powered flight and for flight state determination throughout the mission.
+
+
+
+
+\subsection{Launch Detection Criteria}
+
+Accurate launch detection is critical for enabling thrust vector control at the correct moment. Premature activation can lead to unnecessary servo actuation on the launch rail, while delayed activation reduces the system’s ability to counter early disturbances. To balance responsiveness and robustness, launch detection is based on multiple simultaneous conditions rather than a single acceleration threshold.
+
+The transition from pad idle to powered flight is triggered only when sustained axial acceleration exceeding a predefined threshold is detected, accompanied by a consistent increase in vertical velocity over a short time window. Additionally, a minimum arming time must elapse to prevent accidental activation during handling, and gyroscope noise must remain below a defined threshold to ensure a stable sensor environment. Together, these conditions significantly reduce the probability of false positives while ensuring that thrust vector control engages directly after liftoff.
+
+
+\subsection{Apogee Detection Algorithm}
+
+Apogee detection represents a critical transition between ascent and descent logic, particularly in thrust-vector-controlled rockets where trajectory deviations can introduce oscillatory velocity behavior. Relying solely on instantaneous vertical velocity reaching zero is unreliable in the presence of noise and transient disturbances. To improve robustness, a multi-condition apogee detection algorithm was implemented.
+
+Apogee is identified only when negative vertical velocity is sustained over a defined time interval and when altitude is no longer increasing, as determined by the derivative of altitude data. A minimum time since launch is also enforced to prevent false detections during early flight transients. Additionally, pitch and yaw deviations must remain within acceptable bounds to reduce the likelihood of erroneous state transitions during unstable flight.
+
+Once all conditions are satisfied, the system transitions into the descent phase and prepares recovery sequencing. As a safeguard, a timeout mechanism forces the transition if apogee is not detected within a predefined time window, ensuring that recovery logic is not indefinitely delayed. Apogee detection events are logged to onboard storage and indicated through diagnostic outputs to allow post-flight validation.
+
+
+
+\subsection{Descent and Recovery Phase}
+
+Following apogee detection, the rocket enters the descent phase. During this phase, thrust vector control is fully disabled and the gimbal is mechanically locked, as no thrust is available to generate corrective torque. Sensor monitoring continues, allowing the system to track altitude and vertical velocity for landing detection and post-flight analysis.
+
+Recovery mode is initiated once the rocket descends below a safe altitude threshold and vertical velocity remains sufficiently low for a sustained period, indicating ground contact or near-ground conditions. At this point, final flight data is logged, memory storage is secured, and power to active control components is shut down. The system then enters a passive idle recovery state, awaiting retrieval.
+
+This approach prevents post-landing data corruption and protects actuators from damage due to unnecessary motion after touchdown.
+
+
+\subsection{Abort Mechanisms and Fail-Safe Logic}
+
+To ensure system safety and data integrity, multiple fail-safe mechanisms are embedded within the flight software. These safeguards monitor for abnormal servo behavior, sensor faults, and missed state transitions. In the event of excessive servo command rates, thrust vector control is immediately disabled and the fault is logged. If apogee is not detected within the expected time window, recovery mode is forced to prevent indefinite powered logic execution.
+
+Manual abort capability is also provided during pre-launch conditions, allowing the system to return safely to a standby state in the event of sensor anomalies or excessive pre-launch tilt. In the case of system crashes or unexpected resets, periodic non-volatile memory backups ensure that partial flight data can still be recovered.
+
+
+\subsection{Future Enhancements to Flight Logic}
+
+While the current flight software architecture is able to demonstrate reliable performance, several enhancements could further improve robustness and accuracy. Integrating a high-resolution barometric pressure sensor would provide an independent altitude measurement for improved apogee detection, though care must be taken to mitigate pressure disturbances caused by airflow. Adaptive control strategies, such as in-flight PID gain adjustment or model predictive control, could further optimize stabilization performance under varying flight conditions. Additionally, extending the state machine to support multi-stage propulsion or stage separation detection would enable more complex mission profiles.
+
+

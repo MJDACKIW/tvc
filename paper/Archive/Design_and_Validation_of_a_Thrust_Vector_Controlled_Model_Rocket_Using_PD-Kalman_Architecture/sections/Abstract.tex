@@ -1,0 +1,11 @@
+This paper presents the design, implementation, and simulation-based validation of a thrust vector
+controlled model rocket. The system uses a custom two-axis gimbal to deflect motor thrust in real time,
+replacing passive aerodynamic fins as the sole means of attitude stabilization. A closed-loop PID controller continuously corrects pitch and yaw deviatiohns, while a Kalman filter fuses gyroscope and accelerometer data to produce reliable orientation estimates under vibration and high-acceleration conditions. 
+The flight software is structured as an autonomous state machine, managing all phases of
+flight from launch detection through apogee identification and recovery. Because powered flight testing
+was not possible due to airspace restrictions, system performance was evaluated entirely through
+physics-based simulation, including disturbance rejection analysis and a two-axis Monte Carlo study.
+These simulations validate the control architecture, achieving a 100\% recovery rate across a two-axis Monte Carlo study and defining a maximum recoverable tilt of approximately 12\degree{}, the physical boundary of stable flight.
+The broader aim of this work is to demonstrate that advanced control techniques like thrust vectoring
+are achievable at the hobby and educational scale, and to provide a foundation that other students can
+build on.
