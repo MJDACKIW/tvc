@@ -8,7 +8,12 @@ into a C++ header included by firmware/test/test_parity, then runs the SAME trac
   (a) libtvccore.so/.dylib via ctypes
   (b) `pio test -e native -f test_parity`, which prints controller_step's outputs as CSV
 and asserts the x_hat and u_cmd sequences are bitwise equal.
+
+The fixture header is gitignored, not committed: firmware/pio_pregen.py regenerates it (via
+--fixture-only, below) before every `pio test`, and this script regenerates it again before
+every parity run, so it is always fresh and never shows up as a diff after a Mac run.
 """
+import argparse
 import ctypes
 import math
 import platform
@@ -164,8 +169,21 @@ def run_native_test_side():
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--fixture-only",
+        action="store_true",
+        help="Only (re)write the gitignored parity fixture header, then exit. "
+        "Used by firmware/pio_pregen.py so `pio test -e native` always has a fresh one.",
+    )
+    args = parser.parse_args()
+
     gyro, accel_tilt, gate = generate_trace()
     write_fixture_header(FIXTURE_PATH, gyro, accel_tilt, gate, FIXTURE_PARAMS)
+
+    if args.fixture_only:
+        print(f"parity_test.py: wrote {FIXTURE_PATH.relative_to(REPO_ROOT)}")
+        return
 
     ctypes_results = run_ctypes_side(gyro, accel_tilt, gate, FIXTURE_PARAMS)
     native_results = run_native_test_side()
