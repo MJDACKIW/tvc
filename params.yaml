@@ -8,9 +8,12 @@ control:
   max_deflection_deg: 10.0   # paper §2.2: ±10° command limit (mechanical hard stop is 12°, verified in CAD)
   integral_clamp_deg_s: 5.0  # anti-windup: |integral| clamp, and freeze integration while saturated
 kalman:
-  q: MEASURE              # process noise variance, deg^2 per step
+  # Two-state filter (angle, gyro bias) per SPEC.md Section 3.1, matching
+  # paper/tvc_paper_figures.py's kalman_update() exactly.
+  q_angle: MEASURE        # angle process noise density, deg^2/s per step
+  q_rate: MEASURE         # gyro bias process noise density, (deg/s)^2/s per step
   r: MEASURE              # accel tilt measurement variance, deg^2
-  p0: 1.0
+  p0: 1.0                 # initial covariance diagonal (P0 = eye(2) * p0, off-diag 0)
   accel_gate_g: [0.6, 1.4]   # |a| outside this band -> skip update step (gyro-only); paper §6.7 behaviour
 servo:
   slew_deg_per_s: 500.0   # 60°/0.12 s, paper §3.3
@@ -60,53 +63,62 @@ logging:
   flash_mirror_rate_hz: 50
 
 # --- Sim-only overrides -----------------------------------------------------
-# NOT measured hardware values. These are the numbers paper/tvc_paper_figures.py used to
-# generate the paper's published Figures 2-11 and Table 1 (see that file, and the sections
-# named below). sim/run_sim.py reads this section (via sim/tvc_params.py) in place of the
-# vehicle.*/control.*/kalman.* MEASURE fields above, so the simulation is runnable before
-# the real vehicle is characterized. tools/gen_params.py deliberately excludes this section
-# from core/params.h: firmware must never see paper-simulation numbers as if they were
-# measured hardware constants.
+# NOT measured hardware values. sim/run_sim.py reads this section (via sim/tvc_params.py)
+# in place of the vehicle.*/control.*/kalman.* MEASURE fields above, so the simulation is
+# runnable before the real vehicle is characterized. tools/gen_params.py deliberately
+# excludes this section from core/params.h: firmware must never see paper-simulation or
+# estimated numbers as if they were measured hardware constants.
 #
-# Two values here contradict a non-MEASURE field above; both sides are kept as they are
-# and the conflict is intentional, not a typo:
-#   - cp_offset_m (0.173, = r_gimbal_to_com_m * 0.6) vs vehicle.l_cop_minus_com_m (0.080,
-#     paper Section 2.6's static CoP-CoM offset). The simulation's aero term is also a
-#     different model from SPEC.md Section 3.5's C_Nalpha-based one: a rate-proportional
-#     damping torque (-aero_damp_coeff * omega * q_dyn * A_cs * cp_offset_m), not an
-#     angle-proportional destabilising moment. C_Nalpha is not used anywhere in the
-#     simulation and vehicle.cn_alpha_per_rad stays MEASURE.
-#   - servo_rate_lim_deg_per_s (300.0) vs servo.slew_deg_per_s (500.0, which matches the
-#     paper's own prose: MG90S at 60 deg / 0.12 s). The actual simulation code used 300.
+# Phase 2 (first pass) ported paper/tvc_paper_figures.py's own dynamics model verbatim.
+# That model turned out not to be physically defensible: its "aero" term is a rate-
+# proportional damping torque with no destabilising (negative-static-margin) moment at
+# all, sized by an arbitrary AERO_DAMP_COEFF and a CP-CoM offset (0.173 m) that
+# contradicted vehicle.l_cop_minus_com_m (0.080 m) below, and its cross-sectional area
+# used a 44 mm body diameter that contradicted vehicle.diameter_m (76.2 mm). This
+# revision (second pass) replaces it with the model in SPEC.md Section 3.5: a velocity-
+# integrated dynamic pressure, a C_Nalpha-based destabilising moment using
+# vehicle.l_cop_minus_com_m and vehicle.diameter_m directly (no separate override needed
+# for either anymore), and a matching rotational damping derivative. See sim/vehicle.py
+# and run_sim.py's --legacy-physics mode, which still reproduces the original model
+# byte-for-byte (using legacy_physics.* below) to validate the controller port
+# independently of this physics change.
 #
-# control.kp/kd and kalman.r are retuned from the paper's originals (kp 8.5, kd 1.2,
-# r 0.03), not copied: the paper's Kalman filter is 2-state (angle + gyro bias) and its
-# PID derivative acts on that filter's own bias-corrected rate estimate specifically to
-# avoid noise amplification (see paper/tvc_paper_figures.py's pid_update() call site
-# comment). core/kalman1d is 1-state per SPEC.md Section 3.1, and core/pid.cpp's
-# derivative is a raw finite difference of the angle estimate per SPEC.md Section 3.2 --
-# exactly what the paper's own code comment says would "swamp the command with
-# derivative noise" at 150 Hz. At the paper's original gains this combination is
-# genuinely unstable with sensor noise enabled (verified: diverges within the first
-# second). These retuned values are stable and reproduce paper Table 1 within tolerance;
-# see the Phase 2 commit message for the settling-time metric definition used to compare.
+# control.kp/kd/kalman.q_angle/q_rate/r and the sensor noise values are the paper's own
+# originals, not retuned: they are the numbers paper/tvc_paper_figures.py used for its
+# published Figures 2-11 and Table 1, and Phase 2's job is to reproduce that controller,
+# not improve on it. (A first pass retuned these for a 1-state Kalman filter that turned
+# out to be the wrong port -- see git history -- this revision reverts that and instead
+# ports the paper's actual 2-state filter into core/, so no retuning is needed.)
 sim_overrides:
   vehicle:
-    mass_kg: 0.661                    # dry 0.600 kg + propellant 0.0612 kg
-    inertia_pitch_kg_m2: 0.0231       # thin-rod approximation, L = 0.648 m
-    inertia_yaw_kg_m2: 0.0231
+    mass_kg: 0.661                    # dry 0.600 kg + propellant 0.0612 kg (paper §6.2)
+    # Component-based estimate, not the earlier thin-rod value (mass*L^2/12 = 0.0231):
+    # airframe (nose + body tube + avionics + structure, dry mass minus motor casing)
+    # = 0.570 kg modeled as uniformly distributed over the full length (0.648 m);
+    # motor (casing + propellant) = 0.0912 kg modeled as a 70 mm cylinder centered near
+    # the aft end (x = 0.613 m from the nose tip). Motor casing mass (0.030 kg) is an
+    # estimate -- not a datasheet or measured value. Combining via the parallel axis
+    # theorem (overall CoM at x = 0.364 m from the nose) gives 0.0265 kg.m^2, about 15%
+    # above thin-rod: concentrating a discrete mass near the tail (instead of spreading
+    # it uniformly) is a real, expected effect, not an error. Still an estimate pending
+    # the bifilar pendulum measurement in SPEC.md Section 11; vehicle.inertia_*_kg_m2
+    # above stays MEASURE.
+    inertia_pitch_kg_m2: 0.0265
+    inertia_yaw_kg_m2: 0.0265
     r_gimbal_to_com_m: 0.288
-    cp_offset_m: 0.173                # see note above: r_gimbal_to_com_m * 0.6
     air_density_kg_m3: 1.225
-    rocket_radius_m: 0.022
-    aero_damp_coeff: 0.5
+    drag_coefficient: 0.5             # C_D, placeholder pending real drag characterization
+    cn_alpha_per_rad: 2.0             # ROUGH ESTIMATE: slender-body-alone Barrowman result
+                                       # for a finless body (no fins to contribute lift
+                                       # slope); vehicle.cn_alpha_per_rad above stays
+                                       # MEASURE pending an actual OpenRocket Barrowman run
   control:
-    kp: 4.0                           # paper's original value was 8.5; retuned, see note
-    kd: 0.5                           # paper's original value was 1.2; retuned, see note
-    servo_rate_lim_deg_per_s: 300.0   # see note above: contradicts servo.slew_deg_per_s
+    kp: 8.5                           # paper's original value, not retuned (see note above)
+    kd: 1.2
   kalman:
-    q: 0.001                          # unchanged from the paper's Q_ANGLE
-    r: 1.5                            # paper's original value (R_MEASURE) was 0.03; retuned
+    q_angle: 0.001                    # paper's original Q_ANGLE
+    q_rate: 0.003                     # paper's original Q_RATE
+    r: 0.03                           # paper's original R_MEASURE
   sensors:
     gyro_noise_std_dps: 0.5
     accel_noise_std_deg: 2.5          # already angle-equivalent, not g-units
@@ -114,3 +126,15 @@ sim_overrides:
   staging:
     launch_accel_threshold_g: 2.0     # matches staging.launch_accel_g above
     coast_accel_threshold_g: 0.3      # matches staging.burnout_accel_g above
+  # Exact constants from paper/tvc_paper_figures.py, used only by run_sim.py
+  # --legacy-physics to reproduce its dynamics byte-for-byte (see that file's docstring).
+  # Not used by the corrected physics model above.
+  legacy_physics:
+    moi_kg_m2: 0.0231                 # thin-rod approximation, the script's own value;
+                                       # contradicts vehicle.inertia_pitch_kg_m2 above, which
+                                       # is the component-based estimate the corrected model
+                                       # uses instead
+    cp_offset_m: 0.173                # = r_gimbal_to_com_m * 0.6, the script's own value
+    rocket_radius_m: 0.022            # the script's own value; contradicts diameter_m
+    aero_damp_coeff: 0.5
+    servo_rate_lim_deg_per_s: 300.0   # contradicts servo.slew_deg_per_s (500.0) below

@@ -5,10 +5,13 @@
 namespace tvc {
 
 struct AxisState {
-    float x_hat = 0.0f;
-    float P = 0.0f;
+    float x_hat = 0.0f;     // angle estimate, deg
+    float bias_hat = 0.0f;  // gyro bias estimate, deg/s (kalman2d's second state)
+    float p00 = 0.0f;
+    float p01 = 0.0f;
+    float p10 = 0.0f;
+    float p11 = 0.0f;
     float integral = 0.0f;
-    float e_prev = 0.0f;
     float delta = 0.0f;
     bool saturated = false;
 };
@@ -18,7 +21,7 @@ struct AxisOut {
     float u_raw;
     float u_cmd;
     float delta;
-    float K;
+    float K;  // kalman2d's angle-measurement gain (k0) used this step
     bool accel_used;
 };
 
@@ -29,7 +32,8 @@ struct ControlParams {
     float kd;
     float integral_clamp;
     float max_deflection;
-    float q;
+    float q_angle;
+    float q_rate;
     float r;
     float slew_deg_per_s;
 };

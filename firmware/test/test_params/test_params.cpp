@@ -22,13 +22,14 @@ void test_non_measure_values_match_yaml(void) {
 void test_measure_fields_are_nan(void) {
     TEST_ASSERT_TRUE(std::isnan(tvc::params::control::kp));
     TEST_ASSERT_TRUE(std::isnan(tvc::params::control::kd));
-    TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::q));
+    TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::q_angle));
+    TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::q_rate));
     TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::r));
     TEST_ASSERT_TRUE(std::isnan(tvc::params::vehicle::mass_kg));
 }
 
 void test_measure_list_names_every_measure_field(void) {
-    TEST_ASSERT_EQUAL_INT(13, tvc::params::kMeasureCount);
+    TEST_ASSERT_EQUAL_INT(14, tvc::params::kMeasureCount);
     bool found_kp = false;
     for (int i = 0; i < tvc::params::kMeasureCount; ++i) {
         if (std::strcmp(tvc::params::kMeasureList[i], "control.kp") == 0) {

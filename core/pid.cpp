@@ -2,7 +2,7 @@
 
 namespace tvc {
 
-PidResult pid_step(float& integral, float& e_prev, bool& saturated, float x_hat, float dt,
+PidResult pid_step(float& integral, bool& saturated, float x_hat, float d_error, float dt,
                     float kp, float ki, float kd, float integral_clamp, float max_deflection) {
     float e = 0.0f - x_hat;
 
@@ -15,8 +15,7 @@ PidResult pid_step(float& integral, float& e_prev, bool& saturated, float x_hat,
         integral = -integral_clamp;
     }
 
-    float deriv = (e - e_prev) / dt;
-    float u = kp * e + ki * integral + kd * deriv;
+    float u = kp * e + ki * integral + kd * d_error;
 
     float u_cmd = u;
     if (u_cmd > max_deflection) {
@@ -26,7 +25,6 @@ PidResult pid_step(float& integral, float& e_prev, bool& saturated, float x_hat,
     }
 
     saturated = (u != u_cmd);
-    e_prev = e;
 
     return PidResult{u, u_cmd};
 }

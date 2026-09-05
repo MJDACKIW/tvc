@@ -13,7 +13,7 @@ ifeq ($(origin CXX),default)
 CXX = clang++
 endif
 CXXFLAGS = -std=c++17 -O0 -ffp-contract=off -fPIC -Wall -Wextra
-SOURCES = kalman1d.cpp pid.cpp rate_limiter.cpp controller.cpp ffi.cpp
+SOURCES = kalman2d.cpp pid.cpp rate_limiter.cpp controller.cpp ffi.cpp
 
 ifeq ($(UNAME_S),Darwin)
 	TARGET = libtvccore.dylib

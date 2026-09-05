@@ -13,7 +13,7 @@ static tvc::ControlParams fixture_params() {
         /*dt=*/1.0f / 150.0f,
         /*kp=*/4.0f, /*ki=*/0.0f, /*kd=*/0.5f,
         /*integral_clamp=*/5.0f, /*max_deflection=*/10.0f,
-        /*q=*/1.0f, /*r=*/0.1f,
+        /*q_angle=*/1.0f, /*q_rate=*/1.0f, /*r=*/0.1f,
         /*slew_deg_per_s=*/500.0f,
     };
 }

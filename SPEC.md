@@ -37,7 +37,7 @@ tvc/
 │   └── parity_test.py           # proves sim and firmware core produce identical outputs
 ├── core/                        # PURE C++, no Arduino/Teensy headers. Compiled into BOTH firmware and sim.
 │   ├── params.h                 # GENERATED — do not edit by hand
-│   ├── kalman1d.h/.cpp          # scalar Kalman filter, one instance per axis (paper §3.2, eq6–eq11)
+│   ├── kalman2d.h/.cpp          # 2-state (angle, gyro bias) Kalman filter, one instance per axis (paper §3.2)
 │   ├── pid.h/.cpp                # discrete PID with saturation + anti-windup (paper §3.1, A.3)
 │   ├── rate_limiter.h/.cpp      # servo slew model, 0.12 s / 60° (paper §3.3)
 │   ├── attitude_from_accel.h    # accelerometer tilt z_k per axis
@@ -155,24 +155,61 @@ selected mode blocks the `IDLE → ARMED` transition and reports which parameter
 
 ## 3. Shared core — equations (implement exactly)
 
-All angles in degrees, time in seconds, one independent scalar filter and PID per axis
-(pitch about $X_b$, yaw about $Y_b$). No matrices anywhere in `core/`.
+All angles in degrees, time in seconds, one independent filter and PID per axis (pitch
+about $X_b$, yaw about $Y_b$). No matrix *type* anywhere in `core/`: the 2x2 covariance
+in 3.1 is four explicit scalars (p00/p01/p10/p11), not an `Eigen`/array-of-array object.
 
-### 3.1 Kalman filter (paper §3.2, eq6–eq11, $H = 1$)
+### 3.1 Kalman filter (paper §3.2, 2-state: angle + gyro bias, $H = [1\ \ 0]$)
 
-Predict:
-$$\hat x_{k|k-1} = \hat x_{k-1} + \omega_k\,\Delta t, \qquad P_{k|k-1} = P_{k-1} + Q$$
+State $\hat x = [\hat\theta,\ \hat b]$ (angle, gyro bias). This is a literal port of
+`paper/tvc_paper_figures.py`'s `kalman_update()`, using the same $F$, $Q$, and update
+algebra, not the simplified 1-state filter an earlier draft of this section described
+(that version turned out to be unstable with the paper's gains once sensor noise was
+enabled: its derivative had no noise-immune rate source to draw on, see 3.2).
 
-Update (only if accel gate passes; otherwise $\hat x_k = \hat x_{k|k-1}$, $P_k = P_{k|k-1}$):
-$$K_k = \frac{P_{k|k-1}}{P_{k|k-1} + R}, \qquad
-\hat x_k = \hat x_{k|k-1} + K_k\,(z_k - \hat x_{k|k-1}), \qquad
-P_k = (1 - K_k)\,P_{k|k-1}$$
+Predict, $F = \begin{bmatrix}1 & -\Delta t\\ 0 & 1\end{bmatrix}$, $B = [\Delta t,\ 0]^T$:
+$$\hat\theta_{k|k-1} = \hat\theta_{k-1} + \Delta t\,(\omega_k - \hat b_{k-1}), \qquad
+\hat b_{k|k-1} = \hat b_{k-1}$$
+$$P_{k|k-1} = F P_{k-1} F^T + Q\,\Delta t, \qquad Q = \operatorname{diag}(Q_\theta,\ Q_b)$$
+worked out as four explicit scalars, not a matrix type:
+```
+n00 = p00 + dt*(dt*p11 - p01 - p10 + q_angle)
+n01 = p01 - dt*p11
+n10 = p10 - dt*p11
+n11 = p11 + q_rate*dt
+```
+
+Update (only if accel gate passes; otherwise $\hat x_k = \hat x_{k|k-1}$,
+$P_k = P_{k|k-1}$, and the returned gain $K_0 = 0$):
+```
+y      = z_k - angle           // angle is n00's row of the predicted state
+k0     = n00 / (n00 + R)       // angle-measurement gain (returned as AxisOut.K)
+k1     = n10 / (n00 + R)
+angle += k0*y
+bias  += k1*y
+n11    = n11 - k1*n01          // all four use the PRE-update n00/n01/n10/n11
+n10    = n10 - k1*n00          // (n01, n00 are overwritten last, from their own
+n01    = (1 - k0)*n01          //  originals -- see core/kalman2d.cpp for why order matters)
+n00    = (1 - k0)*n00
+```
 
 `z_k` for pitch is $\operatorname{atan2}(a_y, a_z)$ and for yaw $\operatorname{atan2}(-a_x, a_z)$
-in the **body frame** (after $R_{B\leftarrow S}$ remap) — confirm sign convention against the
+in the **body frame** (after $R_{B\leftarrow S}$ remap); confirm sign convention against the
 servo axis map in Section 4.5 and write it once in `attitude_from_accel.h`, never inline.
 The gate is the paper's "accelerometer unreliable ⇒ rely on gyro" behaviour made explicit; the
-sim must use the identical gate.
+sim must use the identical gate, on $|a|$ against `kalman.accel_gate_g`
+(Section 2), evaluated every tick, not on flight phase (e.g. "before burnout"). Note for the
+sim: during most of a burn, axial specific force is well above 1 g (Estes E12-4 averages
+roughly 1.5 g across the sustained-thrust plateau), so the gate is expected to reject the
+accelerometer for most of powered flight and pass it mainly near ignition and burnout, unlike
+`paper/tvc_paper_figures.py`'s simplified `t <= burn_time` gate. This has a real downstream
+consequence, confirmed by `run_sim.py all`: with $\hat x$ seeded at 0, the brief gate-open
+window near ignition has to correct the whole initial tip-off angle at once, and the coupled
+angle/bias update can attribute part of that one-time correction to $\hat b$ rather than angle.
+That bias then contaminates gyro-only dead reckoning for the rest of the burn (the gate stays
+closed), producing true-angle drift on the order of a degree even with no sensor noise. This is
+a state-estimator artifact of the paper's zero-initialized filter meeting a realistic gate, not
+a `core/` bug; see `sim/run_sim.py`'s `cmd_report()` output for the full account.
 
 ### 3.2 PID (paper §3.1 eq5, Appendix A.3)
 
@@ -180,14 +217,18 @@ sim must use the identical gate.
 e      = 0 - x_hat                     // setpoint is vertical
 if (!saturated_last) integral += e*dt   // conditional integration
 integral = clamp(integral, ±integral_clamp)
-deriv  = (e - e_prev)/dt
-u      = Kp*e + Ki*integral + Kd*deriv
+u      = Kp*e + Ki*integral + Kd*d_error
 u_cmd  = clamp(u, ±max_deflection)
 saturated_last = (u != u_cmd)
-e_prev = e
 ```
-`Ki` defaults to 0 from `params.yaml` (paper §3.1). The derivative acts on the Kalman estimate,
-as the paper specifies; do not add a separate derivative filter without flagging it.
+`Ki` defaults to 0 from `params.yaml` (paper §3.1). `d_error` is supplied by the caller
+(`controller.cpp`), computed as $-\,(\omega - \hat b)$ from 3.1's own bias-corrected rate
+estimate, **not** a finite difference of `e` computed inside `pid_step`. The paper's own
+code comment is explicit about why: a raw `(e - e_prev)/dt` on a noisy angle estimate at
+150 Hz amplifies sensor noise into the derivative term badly enough to destabilise the
+loop (confirmed independently while porting this: the 1-state-filter architecture an
+earlier draft of this section specified diverges with the paper's gains once noise is
+on). Do not reintroduce a finite-difference derivative without flagging it.
 
 ### 3.3 Servo slew model (paper §3.3, §6.6)
 $$\delta_{k} = \delta_{k-1} + \operatorname{clamp}\!\left(u_{cmd,k} - \delta_{k-1},\; \pm\,\dot\delta_{max}\Delta t\right)$$
@@ -196,19 +237,32 @@ the sim models). In the sim it is the actuator model. Same function, same number
 
 ### 3.4 `controller.h` API
 ```cpp
-struct AxisState { float x_hat, P, integral, e_prev, delta; bool saturated; };
+struct AxisState { float x_hat, bias_hat, p00, p01, p10, p11, integral, delta; bool saturated; };
 struct AxisOut   { float x_hat, u_raw, u_cmd, delta, K; bool accel_used; };
+struct ControlParams { float dt, kp, ki, kd, integral_clamp, max_deflection, q_angle, q_rate, r, slew_deg_per_s; };
 AxisOut controller_step(AxisState&, float gyro_deg_s, float accel_tilt_deg, bool accel_gate_ok, const ControlParams&);
 ```
-`ffi.cpp` exposes `tvc_controller_step(...)` with plain floats for ctypes.
+`K` in `AxisOut` is $k_0$, the angle-measurement gain from 3.1 (0 whenever `accel_used` is
+false). `ffi.cpp` exposes `tvc_controller_step(...)` with plain floats for ctypes.
 
 ### 3.5 Corrective torque and disturbance (used by sim and by `iae_compare.py`)
 $$\tau_{ctrl} = F_T(t)\, r\, \sin\delta, \qquad
 \tau_{dist}(\theta) = \tfrac12 \rho v^2 A_{ref} C_{N\alpha}\, \ell\, \theta, \qquad
-I\ddot\theta = \tau_{ctrl} - \tau_{dist}$$
-(paper eq12, eq14, eq18). On the static stand $v = 0$, so $\tau_{dist}=0$ and only gimbal
-friction/inertia remain — the sim must take a `--stand` flag that zeroes aero and uses the
-stand's measured inertia (vehicle + gimbal plate) instead of the free-flight inertia.
+M_q = -\tfrac12 \rho v A_{ref} C_{N\alpha}\, \ell^2\, \omega, \qquad
+I\ddot\theta = \tau_{ctrl} - \tau_{dist} + M_q$$
+(paper eq12, eq14, eq18; $M_q$ is the rotational damping derivative, from the local
+angle-of-attack increment $\ell\omega/v$ an off-CoM point sees, giving a moment
+$\propto \ell$ times that force). $v$ is the integrated axial velocity, not a
+thrust-derived approximation: $\dot v = F_T/m - g - \tfrac12\rho v^2 A_{ref} C_D / m$,
+$q = \tfrac12\rho v^2$. This replaces `paper/tvc_paper_figures.py`'s dynamics, which had
+no destabilising moment at all (only a rate-proportional damping term sized by an
+arbitrary coefficient, not $C_{N\alpha}$); see `sim/vehicle.py` and the `sim_overrides`
+comment in `params.yaml` for the discrepancies that motivated the change, and
+`run_sim.py --legacy-physics` for a mode that still reproduces the paper's original
+dynamics exactly, used to validate the controller port independently of this physics fix.
+On the static stand $v = 0$, so $\tau_{dist} = M_q = 0$ and only gimbal friction/inertia
+remain; the sim must take a `--stand` flag that zeroes aero and uses the stand's measured
+inertia (vehicle + gimbal plate) instead of the free-flight inertia.
 
 ---
 

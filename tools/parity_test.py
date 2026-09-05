@@ -33,7 +33,7 @@ TRACE_LEN = 450  # 3 s @ 150 Hz
 DT = 1.0 / 150.0
 
 # Fixture-only control params: fast/obvious behavior for a determinism check, not the
-# params.yaml flight values (kp, kd, q, r there are still MEASURE).
+# params.yaml flight values (kp, kd, q_angle, q_rate, r there are still MEASURE).
 FIXTURE_PARAMS = {
     "dt": DT,
     "kp": 4.0,
@@ -41,7 +41,8 @@ FIXTURE_PARAMS = {
     "kd": 0.5,
     "integral_clamp": 5.0,
     "max_deflection": 10.0,
-    "q": 0.02,
+    "q_angle": 0.02,
+    "q_rate": 0.05,
     "r": 0.4,
     "slew_deg_per_s": 500.0,
 }
@@ -83,7 +84,8 @@ def write_fixture_header(path, gyro, accel_tilt, gate, params):
         f"constexpr float kParityKd = {f32(params['kd'])};",
         f"constexpr float kParityIntegralClamp = {f32(params['integral_clamp'])};",
         f"constexpr float kParityMaxDeflection = {f32(params['max_deflection'])};",
-        f"constexpr float kParityQ = {f32(params['q'])};",
+        f"constexpr float kParityQAngle = {f32(params['q_angle'])};",
+        f"constexpr float kParityQRate = {f32(params['q_rate'])};",
         f"constexpr float kParityR = {f32(params['r'])};",
         f"constexpr float kParitySlewDegPerS = {f32(params['slew_deg_per_s'])};",
         "",
@@ -97,7 +99,8 @@ def run_ctypes_side(gyro, accel_tilt, gate, params):
     axis = tvc_core.ControllerAxis(
         dt=params["dt"], kp=params["kp"], ki=params["ki"], kd=params["kd"],
         integral_clamp=params["integral_clamp"], max_deflection=params["max_deflection"],
-        q=params["q"], r=params["r"], slew_deg_per_s=params["slew_deg_per_s"],
+        q_angle=params["q_angle"], q_rate=params["q_rate"], r=params["r"],
+        slew_deg_per_s=params["slew_deg_per_s"],
     )
     results = []
     for i in range(len(gyro)):
