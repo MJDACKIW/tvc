@@ -1,58 +1,31 @@
-# TVC Project — CLAUDE.md
+# TVC Project: CLAUDE.md
 
-## Project overview
-Custom Thrust Vector Control (TVC) model rocket: PID-Kalman architecture for
-attitude control during powered ascent. Flagship 3-year project, basis for
-research paper "Design and Validation of a Thrust Vector Controlled Model
-Rocket Using PID-Kalman Architecture."
+Custom Thrust Vector Control (TVC) model rocket. **SPEC.md is the authoritative spec.**
+Read it in full before doing anything in this repo. It covers the repo layout, `params.yaml`,
+the exact control equations, firmware modes, ground station, simulation, and the phased
+build plan. This file is just pointers.
 
-## Hardware
-- Flight computer: Teensy 4.1
-- IMU: MPU6050 (gyro + accel)
-- Servos: SG90 (confirm vs. MG90S — open discrepancy, see paper Section 6)
-- Motor: Estes E12-4
-- Gimbal: custom 2-axis
-- Control loop: PID at 200 Hz
+## Build and test (Phase 1: core/ only, no hardware)
 
-## Repo structure
-- `simulation/` — 12-file Python IAE simulation
-  - `config.py` — physical parameters, constants
-  - `motor.py` — thrust curve model
-  - `dynamics.py` — equations of motion
-  - `kalman.py` — Kalman filter implementation
-  - `control.py` — PID controller
-  - `flight_computer.py` — onboard logic emulation
-  - `simulation.py` — main sim loop
-  - `analysis.py` — IAE / metrics computation
-  - `jacobian.py` — linearization for analysis
-  - `sensitivity.py` — Monte Carlo / sensitivity sweeps
-  - `figures.py` — paper figure generation
-  - `main.py` — entry point
-- `firmware/` — Teensy 4.1 C++ firmware
-- `paper/` — LaTeX source (mirrors Overleaf), `references.bib`, figures
-- `data/` — hardware test logs (CSV), simulation outputs
+```
+python3 tools/gen_params.py                 # params.yaml -> core/params.h, sim/tvc_params.py
+~/.platformio/penv/bin/pio test -e native   # runs firmware/test/ against core/
+python3 tools/parity_test.py                # core/ via ctypes vs. core/ via pio native test
+```
 
-## Known issues / active fixes
-- Aerodynamic damping was missing from dynamics model
-- Wind torque moment arm was incorrect
-- Accelerometer noise was in g-units, needs conversion to angle-equivalent degrees
-- Kalman figure was re-synthesizing noise instead of using logged data
-- Servo model: paper references MG90S, hardware uses SG90 — verify and reconcile
-- IMU axis mapping: verify on bench before live fire
+`pio` lives at `~/.platformio/penv/bin/pio`; use the full path (SPEC.md Section 10: an
+unrelated `.venv` once broke bare `pio` on PATH). `pio test -e native` auto-regenerates
+`core/params.h` via a pre-build script, but run `gen_params.py` by hand after editing
+`params.yaml` if you need `sim/tvc_params.py` refreshed too.
 
-## Derived parameters
-- Total length: ~0.648 m
-- Moment of inertia: ~0.0231 kg·m²
-- Moment arm: ~0.288 m
-- Controller: pure PD (K_I = 0)
-- Disturbance test: t = 0.6s, 0.12 N·m, 50ms duration
-- Monte Carlo: 100 trials, 100/100 recovered
+`core/*.cpp` also builds standalone as a shared library for the Python side:
+`make -C core native` (needs clang or another C++17 compiler).
 
-## Conventions
-- Python 3, use `venv` per project
-- Run figure generation via `figures.py`, outputs go to `paper/figures/`
-- Keep simulation outputs out of git (see .gitignore) unless small and needed for reproducibility
-- When editing the paper, mirror changes between local `.tex` and Overleaf manually unless Overleaf git sync is set up
+## Current phase
+
+Phase 1 (SPEC.md Section 9): repo scaffold, `params.yaml`, `core/`, native unit tests, and
+`parity_test.py`. Phases 2-7 (simulation, vehicle firmware, radio, ground GUI, HIL, flight
+mode) are not started. Do not jump ahead of the current phase without being asked.
 
 ## Style notes
-- No em dashes in any generated text (paper, comments, docs) — flagged as AI-sounding in prior essay reviews
+- No em dashes in any generated text (paper, comments, docs): flagged as AI-sounding in prior essay reviews.

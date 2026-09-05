@@ -1,0 +1,60 @@
+schema: 1
+control:
+  rate_hz: 150            # paper §4, §6.1 — KF + PID update rate; dt = 1/150 s exactly
+  loop_hz: 300            # sensor sample, state machine, logging; integer multiple of rate_hz
+  kp: MEASURE             # paper: Ziegler–Nichols start, refined on stand
+  ki: 0.0                 # paper §3.1: sim uses Ki = 0; firmware keeps the term
+  kd: MEASURE
+  max_deflection_deg: 10.0   # paper §2.2: ±10° command limit (mechanical hard stop is 12°, verified in CAD)
+  integral_clamp_deg_s: 5.0  # anti-windup: |integral| clamp, and freeze integration while saturated
+kalman:
+  q: MEASURE              # process noise variance, deg^2 per step
+  r: MEASURE              # accel tilt measurement variance, deg^2
+  p0: 1.0
+  accel_gate_g: [0.6, 1.4]   # |a| outside this band -> skip update step (gyro-only); paper §6.7 behaviour
+servo:
+  slew_deg_per_s: 500.0   # 60°/0.12 s, paper §3.3
+  us_per_deg_x: MEASURE   # linkage geometry — from servo_ident tool
+  us_per_deg_y: MEASURE
+  neutral_us_x: MEASURE
+  neutral_us_y: MEASURE
+  sign_x: 1
+  sign_y: 1
+vehicle:
+  mass_kg: MEASURE
+  inertia_pitch_kg_m2: MEASURE
+  inertia_yaw_kg_m2: MEASURE
+  r_gimbal_to_com_m: MEASURE        # paper r in eq12
+  l_cop_minus_com_m: 0.080          # paper §2.6: CoP ≈ 80 mm ahead of CoM (positive = destabilising)
+  diameter_m: 0.0762
+  cn_alpha_per_rad: MEASURE         # Barrowman, from OpenRocket
+motor:
+  name: "Estes E12-4"
+  thrust_curve_file: "sim/data/estes_e12.eng"
+  burn_time_s: 2.44                 # paper §6.2
+staging:
+  launch_accel_g: 2.0               # sustained axial accel threshold
+  launch_accel_window_s: 0.05       # must persist this long
+  launch_min_arm_time_s: 5.0        # paper §4.4
+  launch_gyro_quiet_deg_s: 10.0     # paper §4.4: gyro noise must be below this before launch is accepted
+  burnout_accel_g: 0.3              # axial accel drops below this -> burnout candidate
+  burnout_window_s: 0.10
+  prelaunch_tilt_abort_deg: 10.0    # paper §4.7: excessive pre-launch tilt -> abort to SAFE
+  servo_rate_fault_deg_s: 2000.0    # paper §4.7: commanded rate above this for >50 ms -> disable TVC, log fault
+  apogee_timeout_s: 8.0             # free-flight only
+pyro:
+  pulse_ms: 800
+  continuity_ok_min_adc: 200
+  continuity_ok_max_adc: 3800
+  heartbeat_timeout_ms: 1000
+telemetry:
+  rate_hz: 20
+  lora_freq_mhz: 915.0
+  lora_sf: 7
+  lora_bw_khz: 125
+  lora_cr: 5
+  tx_power_dbm: 13
+logging:
+  sd_rate_hz: 300
+  ring_seconds: 12
+  flash_mirror_rate_hz: 50

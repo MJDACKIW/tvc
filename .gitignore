@@ -49,3 +49,13 @@ env/
 
 # Local env vars
 .env
+
+# Generated from params.yaml by tools/gen_params.py (see SPEC.md Section 2): do not commit
+core/params.h
+sim/tvc_params.py
+
+# Native build artifacts (core/Makefile, tools/parity_test.py)
+core/*.o
+core/libtvccore.so
+core/libtvccore.dylib
+
