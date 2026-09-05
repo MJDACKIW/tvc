@@ -472,6 +472,76 @@ lets the paper say the flight and simulation controllers are identical. Run it i
   for bench, HIL, and post-test dumps only.
 - Gimbal mechanical limit is 12° (CAD-verified); paper's control limit is 10°. `max_deflection`
   = 10, and the servo driver additionally hard-clips at 11.5° as a last resort.
+- The legacy `config.h` files under `legacy/` define an older pin map (different SERVO, HX711,
+  BUZZER, and PYRO_CONT assignments) that conflicts with Section 4.5; Section 4.5 wins.
+
+### Legacy platformio.ini environments
+
+Verbatim env definitions from the pre-Phase-1 PlatformIO projects now archived read-only under
+`legacy/`, kept here so Phase 3 can reuse `build_src_filter`, `lib_deps`, `lib_ignore`, and
+`build_flags` without re-deriving them. Historical reference only: some referenced source
+filenames (`radio_test_rx.cpp`, `tvc_servo_ident.cpp`) and the pin maps behind these projects
+do not all match the current tree. Sections 1 and 4.5 win where they disagree.
+
+`legacy/FlightComputer/platformio.ini` (bare PlatformIO template, no custom build settings):
+
+```ini
+[env:teensy41]
+platform = teensy
+board = teensy41
+framework = arduino
+```
+
+`legacy/Radio test/platformio.ini`:
+
+```ini
+[env:teensy_static_fire]
+platform = teensy
+board = teensy41
+framework = arduino
+lib_deps = https://github.com/PaulStoffregen/RadioHead.git
+lib_ignore = RadioHead@1.120.0
+build_src_filter = +<static_fire.cpp> -<radio_test_tx.cpp> -<radio_test_rx.cpp>
+
+[env:teensy_radio_tx]
+platform = teensy
+board = teensy41
+framework = arduino
+lib_deps = https://github.com/PaulStoffregen/RadioHead.git
+lib_ignore = RadioHead@1.120.0
+build_src_filter = +<radio_test_tx.cpp> -<static_fire.cpp> -<radio_test_rx.cpp>
+
+
+[env:feather_radio_rx]
+platform = atmelsam
+board = adafruit_feather_m0
+framework = arduino
+lib_deps = https://github.com/PaulStoffregen/RadioHead.git
+build_src_filter = +<feather_radio_rx.cpp> -<static_fire.cpp> -<radio_test_tx.cpp>
+```
+
+`legacy/TVC platform IO/platformio.ini`:
+
+```ini
+[teensy_base]
+platform = teensy
+board = teensy41
+framework = arduino
+build_flags = -O2
+monitor_speed = 115200
+monitor_echo = yes
+monitor_filters = send_on_enter
+monitor_eol = LF
+
+[env:ident]
+extends = teensy_base
+build_src_filter = +<tvc_servo_ident.cpp>
+
+[env:staticfire]
+extends = teensy_base
+build_src_filter = +<static_fire.cpp>
+lib_deps = greiman/SdFat@^2.2.2
+```
 
 ---
 

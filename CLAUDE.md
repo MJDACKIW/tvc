@@ -23,12 +23,8 @@ unrelated `.venv` once broke bare `pio` on PATH). `pio test -e native` auto-rege
 
 ## Execution environment
 
-Claude Code sessions on this repo may run in an ephemeral remote container, not on the
-Mac. `core/` and its native tests and parity check are container-safe (no hardware). But
-Phases 3+ (uploading to the Teensy 4.1 or Feather M0, radio soak tests, bench runs, anything
-that touches real hardware) need the actual Mac: the boards, the USB ports, and a local
-`~/.platformio/penv/bin/pio` are not reachable from a remote session. Confirm you are on the
-Mac, with `pio` installed at that path, before starting those phases.
+All phases run locally on this Mac. The repo root is the working directory. `legacy/` is
+read-only reference.
 
 ## Current phase
 
