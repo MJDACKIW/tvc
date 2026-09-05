@@ -58,6 +58,10 @@ def generate_cpp(data, params_hash):
     body = ["namespace tvc {\nnamespace params {\n\n"]
     body.append(f'constexpr const char* kParamsHash = "{params_hash}";\n\n')
     for key, value in data.items():
+        if key == "sim_overrides":
+            # Paper-simulation stand-ins for un-MEASUREd hardware fields, not measured
+            # values. Firmware must never see these; sim/tvc_params.py gets them below.
+            continue
         if isinstance(value, dict):
             body.append(emit_cpp_namespace(key, value, key, measure_list, 1))
         else:

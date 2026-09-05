@@ -58,3 +58,59 @@ logging:
   sd_rate_hz: 300
   ring_seconds: 12
   flash_mirror_rate_hz: 50
+
+# --- Sim-only overrides -----------------------------------------------------
+# NOT measured hardware values. These are the numbers paper/tvc_paper_figures.py used to
+# generate the paper's published Figures 2-11 and Table 1 (see that file, and the sections
+# named below). sim/run_sim.py reads this section (via sim/tvc_params.py) in place of the
+# vehicle.*/control.*/kalman.* MEASURE fields above, so the simulation is runnable before
+# the real vehicle is characterized. tools/gen_params.py deliberately excludes this section
+# from core/params.h: firmware must never see paper-simulation numbers as if they were
+# measured hardware constants.
+#
+# Two values here contradict a non-MEASURE field above; both sides are kept as they are
+# and the conflict is intentional, not a typo:
+#   - cp_offset_m (0.173, = r_gimbal_to_com_m * 0.6) vs vehicle.l_cop_minus_com_m (0.080,
+#     paper Section 2.6's static CoP-CoM offset). The simulation's aero term is also a
+#     different model from SPEC.md Section 3.5's C_Nalpha-based one: a rate-proportional
+#     damping torque (-aero_damp_coeff * omega * q_dyn * A_cs * cp_offset_m), not an
+#     angle-proportional destabilising moment. C_Nalpha is not used anywhere in the
+#     simulation and vehicle.cn_alpha_per_rad stays MEASURE.
+#   - servo_rate_lim_deg_per_s (300.0) vs servo.slew_deg_per_s (500.0, which matches the
+#     paper's own prose: MG90S at 60 deg / 0.12 s). The actual simulation code used 300.
+#
+# control.kp/kd and kalman.r are retuned from the paper's originals (kp 8.5, kd 1.2,
+# r 0.03), not copied: the paper's Kalman filter is 2-state (angle + gyro bias) and its
+# PID derivative acts on that filter's own bias-corrected rate estimate specifically to
+# avoid noise amplification (see paper/tvc_paper_figures.py's pid_update() call site
+# comment). core/kalman1d is 1-state per SPEC.md Section 3.1, and core/pid.cpp's
+# derivative is a raw finite difference of the angle estimate per SPEC.md Section 3.2 --
+# exactly what the paper's own code comment says would "swamp the command with
+# derivative noise" at 150 Hz. At the paper's original gains this combination is
+# genuinely unstable with sensor noise enabled (verified: diverges within the first
+# second). These retuned values are stable and reproduce paper Table 1 within tolerance;
+# see the Phase 2 commit message for the settling-time metric definition used to compare.
+sim_overrides:
+  vehicle:
+    mass_kg: 0.661                    # dry 0.600 kg + propellant 0.0612 kg
+    inertia_pitch_kg_m2: 0.0231       # thin-rod approximation, L = 0.648 m
+    inertia_yaw_kg_m2: 0.0231
+    r_gimbal_to_com_m: 0.288
+    cp_offset_m: 0.173                # see note above: r_gimbal_to_com_m * 0.6
+    air_density_kg_m3: 1.225
+    rocket_radius_m: 0.022
+    aero_damp_coeff: 0.5
+  control:
+    kp: 4.0                           # paper's original value was 8.5; retuned, see note
+    kd: 0.5                           # paper's original value was 1.2; retuned, see note
+    servo_rate_lim_deg_per_s: 300.0   # see note above: contradicts servo.slew_deg_per_s
+  kalman:
+    q: 0.001                          # unchanged from the paper's Q_ANGLE
+    r: 1.5                            # paper's original value (R_MEASURE) was 0.03; retuned
+  sensors:
+    gyro_noise_std_dps: 0.5
+    accel_noise_std_deg: 2.5          # already angle-equivalent, not g-units
+    gyro_drift_rate_dps_per_s: 0.8    # accumulates only after burnout
+  staging:
+    launch_accel_threshold_g: 2.0     # matches staging.launch_accel_g above
+    coast_accel_threshold_g: 0.3      # matches staging.burnout_accel_g above

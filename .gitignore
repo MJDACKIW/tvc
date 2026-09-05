@@ -66,3 +66,8 @@ core/libtvccore.dylib
 # PlatformIO build dirs nested under any future legacy/ ported-firmware copies
 legacy/**/.pio/
 
+# sim/run_sim.py scenario outputs (.npz + PNG per scenario, SPEC.md Section 6):
+# regeneratable from params.yaml and a scenario name, not needed for reproducibility
+sim/figures/*.npz
+sim/figures/*.png
+

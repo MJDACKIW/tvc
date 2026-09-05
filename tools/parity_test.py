@@ -14,15 +14,16 @@ The fixture header is gitignored, not committed: firmware/pio_pregen.py regenera
 every parity run, so it is always fresh and never shows up as a diff after a Mac run.
 """
 import argparse
-import ctypes
 import math
-import platform
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "sim"))
+import tvc_core  # noqa: E402  (path must be set up before this import)
+
 CORE_DIR = REPO_ROOT / "core"
 FIRMWARE_DIR = REPO_ROOT / "firmware"
 FIXTURE_PATH = FIRMWARE_DIR / "test" / "test_parity" / "parity_fixture.h"
@@ -91,54 +92,17 @@ def write_fixture_header(path, gyro, accel_tilt, gate, params):
     path.write_text("\n".join(lines) + "\n")
 
 
-def native_lib_path():
-    name = "libtvccore.dylib" if platform.system() == "Darwin" else "libtvccore.so"
-    return CORE_DIR / name
-
-
 def run_ctypes_side(gyro, accel_tilt, gate, params):
-    subprocess.run(["make", "-C", str(CORE_DIR), "native"], check=True)
-
-    lib = ctypes.CDLL(str(native_lib_path()))
-    c_float_p = ctypes.POINTER(ctypes.c_float)
-    c_int_p = ctypes.POINTER(ctypes.c_int)
-    lib.tvc_controller_step.argtypes = [
-        c_float_p, c_float_p, c_float_p, c_float_p, c_float_p, c_int_p,
-        ctypes.c_float, ctypes.c_float, ctypes.c_int,
-        ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
-        ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
-        c_float_p, c_float_p, c_float_p, c_float_p, c_float_p, c_int_p,
-    ]
-    lib.tvc_controller_step.restype = None
-
-    x_hat = ctypes.c_float(0.0)
-    P = ctypes.c_float(0.0)
-    integral = ctypes.c_float(0.0)
-    e_prev = ctypes.c_float(0.0)
-    delta = ctypes.c_float(0.0)
-    saturated = ctypes.c_int(0)
-    out_x_hat = ctypes.c_float()
-    out_u_raw = ctypes.c_float()
-    out_u_cmd = ctypes.c_float()
-    out_delta = ctypes.c_float()
-    out_K = ctypes.c_float()
-    out_accel_used = ctypes.c_int()
-
+    tvc_core.build()
+    axis = tvc_core.ControllerAxis(
+        dt=params["dt"], kp=params["kp"], ki=params["ki"], kd=params["kd"],
+        integral_clamp=params["integral_clamp"], max_deflection=params["max_deflection"],
+        q=params["q"], r=params["r"], slew_deg_per_s=params["slew_deg_per_s"],
+    )
     results = []
     for i in range(len(gyro)):
-        lib.tvc_controller_step(
-            ctypes.byref(x_hat), ctypes.byref(P), ctypes.byref(integral),
-            ctypes.byref(e_prev), ctypes.byref(delta), ctypes.byref(saturated),
-            ctypes.c_float(gyro[i]), ctypes.c_float(accel_tilt[i]), int(gate[i]),
-            ctypes.c_float(params["dt"]), ctypes.c_float(params["kp"]),
-            ctypes.c_float(params["ki"]), ctypes.c_float(params["kd"]),
-            ctypes.c_float(params["integral_clamp"]), ctypes.c_float(params["max_deflection"]),
-            ctypes.c_float(params["q"]), ctypes.c_float(params["r"]),
-            ctypes.c_float(params["slew_deg_per_s"]),
-            ctypes.byref(out_x_hat), ctypes.byref(out_u_raw), ctypes.byref(out_u_cmd),
-            ctypes.byref(out_delta), ctypes.byref(out_K), ctypes.byref(out_accel_used),
-        )
-        results.append((out_x_hat.value, out_u_cmd.value))
+        out = axis.step(gyro[i], accel_tilt[i], gate[i])
+        results.append((out["x_hat"], out["u_cmd"]))
     return results
 
 

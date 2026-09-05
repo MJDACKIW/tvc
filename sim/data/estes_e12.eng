@@ -1,0 +1,31 @@
+; Estes E12-4 - NAR certified thrust curve (ThrustCurve.org)
+; Data points used by paper/tvc_paper_figures.py to generate the paper's Figures 2-11
+; and Table 1 (paper Section 6.2). Peak 33.0 N @ t=0.287 s, mean 11.12 N, burn 2.44 s.
+E12 24 70 4-7-10 P 60.5 90.0 Estes
+   0.000    0.0
+   0.050    5.1
+   0.100   10.0
+   0.150   24.1
+   0.200   31.5
+   0.287   33.0
+   0.300   30.0
+   0.350   17.1
+   0.400   14.6
+   0.450   13.2
+   0.500   11.7
+   0.600   11.2
+   0.700   11.2
+   0.800   10.5
+   0.900   10.1
+   1.000    9.8
+   1.200    9.8
+   1.400    9.7
+   1.600    9.7
+   1.800    9.7
+   2.000    9.8
+   2.100    9.8
+   2.200    9.7
+   2.300    9.5
+   2.380    6.1
+   2.440    0.0
+;
