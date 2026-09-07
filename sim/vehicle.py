@@ -196,16 +196,19 @@ class Vehicle:
 
 class LegacyVehicle:
     """Exact reproduction of paper/tvc_paper_figures.py's dynamics (rate-only damping,
-    thrust-derived dynamic pressure, no destabilising moment), for run_sim.py
-    --legacy-physics. See params.yaml's sim_overrides.legacy_physics comment.
+    thrust-derived dynamic pressure q = rho*F/m, no destabilising moment), for
+    run_sim.py --legacy-physics. Reads only from params.yaml's sim_overrides.legacy_physics,
+    never from sim_overrides.vehicle: nothing is shared with the corrected Vehicle model,
+    even where a value happens to be numerically identical, so an edit to the corrected
+    model's block can never silently perturb this reproduction.
     """
 
-    def __init__(self, vehicle_params, legacy_params, motor_params):
-        self.mass_kg = vehicle_params.mass_kg
+    def __init__(self, legacy_params, motor_params):
+        self.mass_kg = legacy_params.mass_kg
         self.moi_kg_m2 = legacy_params.moi_kg_m2
-        self.moment_arm_m = vehicle_params.r_gimbal_to_com_m
+        self.moment_arm_m = legacy_params.r_gimbal_to_com_m
         self.cp_offset_m = legacy_params.cp_offset_m
-        self.air_density_kg_m3 = vehicle_params.air_density_kg_m3
+        self.air_density_kg_m3 = legacy_params.air_density_kg_m3
         self.aero_damp_coeff = legacy_params.aero_damp_coeff
         self.cross_section_area_m2 = math.pi * legacy_params.rocket_radius_m ** 2
 

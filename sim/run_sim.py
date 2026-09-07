@@ -54,7 +54,7 @@ PLOT_END_S = 3.5
 def build_vehicle(legacy_physics=False):
     ov = tvc_params.sim_overrides
     if legacy_physics:
-        return LegacyVehicle(ov.vehicle, ov.legacy_physics, tvc_params.motor)
+        return LegacyVehicle(ov.legacy_physics, tvc_params.motor)
     return Vehicle(ov.vehicle, tvc_params.vehicle, tvc_params.motor)
 
 

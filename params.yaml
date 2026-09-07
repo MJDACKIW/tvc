@@ -130,11 +130,23 @@ sim_overrides:
   # --legacy-physics to reproduce its dynamics byte-for-byte (see that file's docstring).
   # Not used by the corrected physics model above.
   legacy_physics:
-    moi_kg_m2: 0.0231                 # thin-rod approximation, the script's own value;
-                                       # contradicts vehicle.inertia_pitch_kg_m2 above, which
-                                       # is the component-based estimate the corrected model
-                                       # uses instead
-    cp_offset_m: 0.173                # = r_gimbal_to_com_m * 0.6, the script's own value
-    rocket_radius_m: 0.022            # the script's own value; contradicts diameter_m
-    aero_damp_coeff: 0.5
-    servo_rate_lim_deg_per_s: 300.0   # contradicts servo.slew_deg_per_s (500.0) below
+    # Fully self-contained mirror of paper/tvc_paper_figures.py's own constants block.
+    # LegacyVehicle reads ONLY from here, never from sim_overrides.vehicle above: nothing
+    # is shared with the corrected model, even where a value happens to be numerically
+    # identical (mass_kg, air_density_kg_m3), so a future edit to the corrected model's
+    # block can never silently perturb the legacy reproduction (this is exactly what
+    # happened before: LegacyVehicle read inertia_pitch_kg_m2 from vehicle_params and
+    # picked up the corrected 0.0265 estimate instead of the paper's own 0.0231 once that
+    # field was updated for the physics fix).
+    mass_kg: 0.661                    # paper's ROCKET_MASS
+    moi_kg_m2: 0.0231                 # paper's MOI: thin-rod approximation, L = 0.648 m
+    r_gimbal_to_com_m: 0.288          # paper's MOMENT_ARM
+    cp_offset_m: 0.173                # paper's CP_OFFSET (= MOMENT_ARM * 0.6)
+    air_density_kg_m3: 1.225          # paper's AIR_DENSITY
+    rocket_radius_m: 0.022            # paper's ROCKET_RADIUS; contradicts vehicle.diameter_m
+    aero_damp_coeff: 0.5              # paper's AERO_DAMP_COEFF
+    servo_rate_lim_deg_per_s: 300.0   # paper's SERVO_RATE_LIM; contradicts servo.slew_deg_per_s
+    # Dynamic pressure formula (paper's _alpha): q_dyn = air_density_kg_m3 * thrust_n /
+    # mass_kg, i.e. rho*F/m (paper's own comment: "= 0.5*rho*(2F/m)"), not the corrected
+    # model's rho*v^2/2. This is a formula, not a stored constant; see
+    # LegacyVehicle.angular_accel_deg_s2 in sim/vehicle.py.
