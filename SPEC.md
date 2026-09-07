@@ -247,20 +247,41 @@ false). `ffi.cpp` exposes `tvc_controller_step(...)` with plain floats for ctype
 
 ### 3.5 Corrective torque and disturbance (used by sim and by `iae_compare.py`)
 $$\tau_{ctrl} = F_T(t)\, r\, \sin\delta, \qquad
-\tau_{dist}(\theta) = \tfrac12 \rho v^2 A_{ref} C_{N\alpha}\, \ell\, \theta, \qquad
+\tau_{aero}(\theta) = \tfrac12 \rho v^2 A_{ref} C_{N\alpha}\, \ell\, \theta, \qquad
 M_q = -\tfrac12 \rho v A_{ref} C_{N\alpha}\, \ell^2\, \omega, \qquad
-I\ddot\theta = \tau_{ctrl} - \tau_{dist} + M_q$$
-(paper eq12, eq14, eq18; $M_q$ is the rotational damping derivative, from the local
-angle-of-attack increment $\ell\omega/v$ an off-CoM point sees, giving a moment
-$\propto \ell$ times that force). $v$ is the integrated axial velocity, not a
-thrust-derived approximation: $\dot v = F_T/m - g - \tfrac12\rho v^2 A_{ref} C_D / m$,
-$q = \tfrac12\rho v^2$. This replaces `paper/tvc_paper_figures.py`'s dynamics, which had
-no destabilising moment at all (only a rate-proportional damping term sized by an
-arbitrary coefficient, not $C_{N\alpha}$); see `sim/vehicle.py` and the `sim_overrides`
-comment in `params.yaml` for the discrepancies that motivated the change, and
-`run_sim.py --legacy-physics` for a mode that still reproduces the paper's original
-dynamics exactly, used to validate the controller port independently of this physics fix.
-On the static stand $v = 0$, so $\tau_{dist} = M_q = 0$ and only gimbal friction/inertia
+I\ddot\theta = \tau_{ctrl} + \tau_{aero} + M_q$$
+($M_q$ is the rotational damping derivative, from the local angle-of-attack increment
+$\ell\omega/v$ an off-CoM point sees, giving a moment $\propto \ell$ times that force).
+$\ell$ (`vehicle.l_cop_minus_com_m`) is documented as positive when the CoP sits ahead of
+the CoM, this vehicle's actual finless configuration, and is stored positive (0.080 m):
+$\tau_{aero}$ must therefore be ADDED, not subtracted, so that a positive $\ell$ produces a
+positive-feedback (destabilising, same sign as $\theta$) term, not a spring-like restoring
+one. An earlier revision of this section subtracted $\tau_{aero}$, which for a positive
+$\ell$ gives $I\ddot\theta \supset -k\theta$ ($k>0$): a stable damped oscillator, caught by
+an open-loop sanity check (5 deg tip-off, zero rate, no control) that should diverge
+monotonically but instead showed bounded, decaying oscillation until this was fixed.
+
+The paper itself carries the equivalent sign ambiguity, unforced only because its own
+simulation script never implements $C_{N\alpha}$ at all (Section 6). Its eq14
+($\ell = x_{CoP} - x_{CoM}$, giving $\tau_{dist}(\theta) \approx \tfrac12\rho v^2 A_{ref}
+C_{N\alpha}\,\ell\,\theta$) defines $\ell$ as a signed coordinate difference that is
+negative for this vehicle's CoP-ahead-of-CoM geometry, making $\tau_{dist}$ negative for
+positive $\theta$; its eq18 ($\theta_{max} \approx F_T r \sin\delta_{max} /
+(\tfrac12\rho v^2 A_{ref} C_{N\alpha}\,\ell)$) only yields the paper's stated positive
+$\theta_{max}\approx 12$-$15\deg$ if $\ell$ is instead treated as a positive magnitude in
+the denominator. The two equations are not consistent about what sign $\ell$ carries; this
+spec's convention (used above) resolves it by fixing $\ell$ positive-for-destabilising and
+adding $\tau_{aero}$ in the equation of motion, rather than by giving $\ell$ a sign.
+
+$v$ is the integrated axial velocity, not a thrust-derived approximation:
+$\dot v = F_T/m - g - \tfrac12\rho v^2 A_{ref} C_D / m$, $q = \tfrac12\rho v^2$. This
+replaces `paper/tvc_paper_figures.py`'s dynamics, which had no destabilising moment at all
+(only a rate-proportional damping term sized by an arbitrary coefficient, not
+$C_{N\alpha}$); see `sim/vehicle.py` and the `sim_overrides` comment in `params.yaml` for
+the discrepancies that motivated the change, and `run_sim.py --legacy-physics` for a mode
+that still reproduces the paper's original dynamics exactly, used to validate the
+controller port independently of this physics fix.
+On the static stand $v = 0$, so $\tau_{aero} = M_q = 0$ and only gimbal friction/inertia
 remain; the sim must take a `--stand` flag that zeroes aero and uses the stand's measured
 inertia (vehicle + gimbal plate) instead of the free-flight inertia.
 
@@ -435,10 +456,15 @@ at real time for demoing without hardware, and a `--sim` flag that connects to
 
 ## 6. Simulation (`sim/`) — must match the paper and the firmware
 
-- RK4 at 1 ms on $I\ddot\theta = \tau_{ctrl}-\tau_{dist}$ per axis (paper §6.1). Thrust from
-  NAR E12-4 data via `numpy.interp` (paper §6.2). Control tick every 6.667 ms: implement as
-  "run controller when `t >= next_ctrl_t`, `next_ctrl_t += 1/150`" so the sim and firmware see
-  the same $\Delta t$.
+- RK4 at 1 ms on $I\ddot\theta = \tau_{ctrl}+\tau_{aero}+M_q$ per axis (Section 3.5). Thrust
+  from NAR E12-4 data via `numpy.interp` (paper §6.2). Control tick every 7 physics steps
+  (`ctrl_every = round(1 / (150 * 0.001)) = 7`, giving $\Delta t = 0.007$ s, not the literal
+  1/150 s), matching the paper script's own integer-step quantization exactly: a fixed-step
+  simulator can only fire the controller on a step boundary, so 150 Hz is actually realized
+  as 1000/7 = 142.857 Hz, and the sim must use that same realized rate and the same $\Delta t$
+  the firmware would, not a floating-point time threshold that drifts in and out of phase
+  with it (`run_sim.py`'s own history: this cost a full percentage point of `legacy_check`
+  parity before being caught).
 - The controller is `core/` via ctypes (`libtvccore.dylib` built by `make -C core native` with
   clang). A pure-Python fallback is **not** allowed in the main path; it may exist only inside
   `parity_test.py` as a reference.

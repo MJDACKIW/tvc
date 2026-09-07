@@ -150,7 +150,20 @@ class Vehicle:
     def angular_accel_deg_s2(self, theta_deg, omega_deg_s, thrust_n, gimbal_deg,
                               extra_torque_nm, v):
         """Angular acceleration (deg/s^2): TVC torque, the C_Nalpha destabilising
-        moment, its damping derivative, and any externally injected torque."""
+        moment, its damping derivative, and any externally injected torque.
+
+        tau_dist is ADDED, not subtracted: params.yaml's l_cop_minus_com_m is documented
+        as "positive = destabilising" (CoP ahead of CoM, this vehicle's actual finless
+        configuration), so a positive tau_dist must have the SAME sign as theta -- a
+        positive-feedback term that grows the tilt, not a spring-like restoring one. An
+        earlier version subtracted it, which for a positive l_cop_minus_com_m produces
+        I*theta'' -k*theta (k>0): a stable damped oscillator, the opposite of what a
+        negative-static-margin body does. Caught by an open-loop sanity check (theta0=5,
+        omega0=0, no control): the buggy sign gave bounded decaying oscillation; a
+        genuine positive-feedback instability should diverge monotonically instead, which
+        it does after this fix. See SPEC.md Section 3.5 for the paper's own equivalent
+        sign ambiguity between its eq14 and eq18.
+        """
         tau_tvc = thrust_n * self.moment_arm_m * math.sin(math.radians(gimbal_deg))
 
         q_dyn = 0.5 * self.air_density_kg_m3 * v * v
@@ -162,7 +175,7 @@ class Vehicle:
         m_q = (-0.5 * self.air_density_kg_m3 * v * self.cross_section_area_m2
                * self.cn_alpha_per_rad * self.l_cop_com_m ** 2 * omega_rad_s)
 
-        return math.degrees((tau_tvc - tau_dist + m_q + extra_torque_nm) / self.moi_kg_m2)
+        return math.degrees((tau_tvc + tau_dist + m_q + extra_torque_nm) / self.moi_kg_m2)
 
     def rk4_step(self, t, dt, theta_deg, omega_deg_s, gimbal_deg, extra_torque_nm,
                  thrust_scale=1.0):

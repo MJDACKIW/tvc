@@ -229,6 +229,11 @@ def run_monte_carlo(n_trials=100, seed_master=2024, legacy_physics=False):
     burn_time_s = build_vehicle(legacy_physics).burn_time_s
     master = np.random.default_rng(seed_master)
     pitch_ok = yaw_ok = 0
+    theta0_pitch = np.zeros(n_trials)
+    theta0_yaw = np.zeros(n_trials)
+    thrust_scales = np.zeros(n_trials)
+    max_pitch = np.zeros(n_trials)
+    max_yaw = np.zeros(n_trials)
     for trial in range(n_trials):
         th_p = master.uniform(0.5, 6.0)
         th_y = master.uniform(0.5, 6.0)
@@ -237,11 +242,19 @@ def run_monte_carlo(n_trials=100, seed_master=2024, legacy_physics=False):
                              t_end=burn_time_s, legacy_physics=legacy_physics)
         ry = run_simulation(theta0_deg=th_y, thrust_scale=tsc, seed=trial + 10000,
                              t_end=burn_time_s, legacy_physics=legacy_physics)
-        if np.max(np.abs(rp["true_angle"])) < 15.0:
+        theta0_pitch[trial] = th_p
+        theta0_yaw[trial] = th_y
+        thrust_scales[trial] = tsc
+        max_pitch[trial] = np.max(np.abs(rp["true_angle"]))
+        max_yaw[trial] = np.max(np.abs(ry["true_angle"]))
+        if max_pitch[trial] < 15.0:
             pitch_ok += 1
-        if np.max(np.abs(ry["true_angle"])) < 15.0:
+        if max_yaw[trial] < 15.0:
             yaw_ok += 1
-    return pitch_ok, yaw_ok, n_trials
+    return pitch_ok, yaw_ok, n_trials, {
+        "theta0_pitch": theta0_pitch, "theta0_yaw": theta0_yaw,
+        "thrust_scales": thrust_scales, "max_pitch": max_pitch, "max_yaw": max_yaw,
+    }
 
 
 def run_controllability_map(n_pts=15, legacy_physics=False):
@@ -258,6 +271,41 @@ def run_controllability_map(n_pts=15, legacy_physics=False):
                                   t_end=burn_time_s, legacy_physics=legacy_physics)
             recovered[j, i] = 1.0 if np.max(np.abs(log["true_angle"])) < 15.0 else 0.0
     return thetas, rates, recovered
+
+
+def open_loop_divergence_time(theta0_deg=5.0, threshold_deg=15.0, legacy_physics=False,
+                               t_end=PLOT_END_S):
+    """Time for |true_angle| to first reach threshold_deg with no control (open loop) and
+    zero initial rate, no noise. None if it never does within t_end."""
+    log = run_simulation(theta0_deg=theta0_deg, rate0_deg_s=0.0, open_loop=True,
+                          noise=False, legacy_physics=legacy_physics, t_end=t_end)
+    idx = np.where(np.abs(log["true_angle"]) >= threshold_deg)[0]
+    return float(log["time"][idx[0]]) if len(idx) else None
+
+
+def find_zero_rate_boundary(legacy_physics=False, lo=0.0, hi=20.0, tol=0.05):
+    """Bisection for the critical initial pitch angle at zero initial rate separating
+    recovered (|theta| < 15 deg throughout the burn) from diverged, using the same method
+    as run_controllability_map but at much finer resolution along this one slice. Assumes
+    recovery is monotonic in theta0 at rate0=0, which held for both models when checked."""
+    burn_time_s = build_vehicle(legacy_physics).burn_time_s
+
+    def recovers(theta0):
+        log = run_simulation(theta0_deg=theta0, rate0_deg_s=0.0, noise=False,
+                              t_end=burn_time_s, legacy_physics=legacy_physics)
+        return np.max(np.abs(log["true_angle"])) < 15.0
+
+    if not recovers(lo):
+        return lo
+    if recovers(hi):
+        return hi
+    while hi - lo > tol:
+        mid = 0.5 * (lo + hi)
+        if recovers(mid):
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +356,40 @@ def _plot_controllability_map(name, thetas, rates, recovered):
     plt.close(fig)
 
 
+def _plot_monte_carlo(name, trials):
+    """Per-trial max|theta| vs. initial tip-off angle, pitch and yaw side by side. Simpler
+    than paper/tvc_paper_figures.py's fig10 (which overlays all 100 full traces plus a
+    percentile band); this shows the same recovered-vs-diverged outcome per trial against
+    the 15 deg threshold without re-plotting every trace.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    for ax, theta0_key, max_key, label in (
+            (axs[0], "theta0_pitch", "max_pitch", "Pitch"),
+            (axs[1], "theta0_yaw", "max_yaw", "Yaw")):
+        theta0 = trials[theta0_key]
+        max_angle = trials[max_key]
+        recovered = max_angle < 15.0
+        ax.scatter(theta0[recovered], max_angle[recovered], color="tab:blue", s=18,
+                   label="Recovered")
+        ax.scatter(theta0[~recovered], max_angle[~recovered], color="tab:red", s=18,
+                   label="Diverged")
+        ax.axhline(15.0, color="grey", ls="--", lw=1.0, label="15 deg threshold")
+        ax.set_xlabel("Initial tip-off angle (deg)")
+        ax.set_title(f"{label}: {int(recovered.sum())}/{len(recovered)} recovered")
+        ax.grid(alpha=0.3)
+        ax.legend(loc="upper left", fontsize=8)
+    axs[0].set_ylabel("max |theta| during burn (deg)")
+    fig.suptitle(f"Monte Carlo per-trial outcome\nparams hash {tvc_params.PARAMS_HASH[:12]}")
+    fig.tight_layout()
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIG_DIR / f"{name}.png", dpi=150)
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Scenario commands
 # ---------------------------------------------------------------------------
@@ -345,7 +427,7 @@ def cmd_disturbance(theta0_deg=5.0, seed=42, legacy_physics=False, disturbance=N
         tag = " [legacy-physics]" if legacy_physics else ""
         print(f"disturbance{tag} ({disturbance['kind']}): peak deviation = {peak:.3f} deg, "
               f"recovery time = {recovery:.3f} s")
-    suffix = "_legacy" if legacy_physics else ""
+    suffix = f"_{disturbance['kind']}" + ("_legacy" if legacy_physics else "")
     _save_npz(f"disturbance{suffix}", nominal_angle=nominal["true_angle"],
               disturbed_angle=disturbed["true_angle"], time=nominal["time"])
     _plot_angle(f"disturbance{suffix}", f"Disturbance Rejection ({disturbance['kind']})",
@@ -355,11 +437,14 @@ def cmd_disturbance(theta0_deg=5.0, seed=42, legacy_physics=False, disturbance=N
 
 
 def cmd_monte_carlo(n_trials=100, legacy_physics=False, quiet=False):
-    pitch_ok, yaw_ok, n = run_monte_carlo(n_trials=n_trials, legacy_physics=legacy_physics)
+    pitch_ok, yaw_ok, n, trials = run_monte_carlo(n_trials=n_trials, legacy_physics=legacy_physics)
     if not quiet:
         tag = " [legacy-physics]" if legacy_physics else ""
         print(f"monte_carlo{tag}: pitch {pitch_ok}/{n}, yaw {yaw_ok}/{n} recovered")
-    return pitch_ok, yaw_ok, n
+    suffix = "_legacy" if legacy_physics else ""
+    _save_npz(f"monte_carlo{suffix}", **trials)
+    _plot_monte_carlo(f"monte_carlo{suffix}", trials)
+    return pitch_ok, yaw_ok, n, trials
 
 
 def cmd_open_loop(theta0_deg=5.0, seed=42, legacy_physics=False):
@@ -460,20 +545,32 @@ def cmd_legacy_check():
 # ---------------------------------------------------------------------------
 
 def cmd_report():
+    """Task 4: baseline, open_loop, disturbance (crosswind gust and the paper's own
+    torque impulse), controllability_map, and monte_carlo, all on the corrected physics.
+    One table against paper Table 1 and the old script. Not tuned toward either.
+    """
     paper_sim = _load_paper_script()
     old_burn = paper_sim.BURN_TIME
+    new_burn = build_vehicle(False).burn_time_s
 
     old_nominal = paper_sim.run_simulation(theta0_deg=5.0, seed=42)
-    on_mask = old_nominal["time"] <= old_burn
-    old_settling = settling_time_s(old_nominal["time"][on_mask],
-                                    old_nominal["true_angle"][on_mask], theta0=5.0)
+    om = old_nominal["time"] <= old_burn
+    old_settling = settling_time_s(old_nominal["time"][om], old_nominal["true_angle"][om],
+                                    theta0=5.0)
+    _, new_settling = cmd_baseline(quiet=True)
 
-    old_disturbed = paper_sim.run_simulation(
+    old_disturbed_ti = paper_sim.run_simulation(
         theta0_deg=5.0, seed=42,
         disturbance={"torque_Nm": 0.12, "start_s": 0.6, "duration_s": 0.05})
-    old_peak, old_recovery = peak_deviation_and_recovery(
-        old_nominal["time"][on_mask], old_nominal["true_angle"][on_mask],
-        old_disturbed["true_angle"][on_mask], 0.6, 0.65)
+    old_peak_ti, old_recovery_ti = peak_deviation_and_recovery(
+        old_nominal["time"][om], old_nominal["true_angle"][om],
+        old_disturbed_ti["true_angle"][om], 0.6, 0.65)
+    new_peak_ti, new_recovery_ti = cmd_disturbance(disturbance=TORQUE_DISTURBANCE, quiet=True)
+
+    # Crosswind: corrected physics only. LegacyVehicle has no crosswind_torque_nm method
+    # (Vehicle-only, since it needs the integrated velocity the legacy model doesn't
+    # track) and the paper never modeled this disturbance mechanism at all.
+    new_peak_cw, new_recovery_cw = cmd_disturbance(quiet=True)  # crosswind is the default
 
     old_pitch_ok, old_yaw_ok = 0, 0
     old_master = np.random.default_rng(2024)
@@ -488,79 +585,123 @@ def cmd_report():
         old_pitch_ok += int(np.max(np.abs(rp["true_angle"])) < 15.0)
         old_yaw_ok += int(np.max(np.abs(ry["true_angle"])) < 15.0)
 
+    new_pitch_ok, new_yaw_ok, _, new_trials = cmd_monte_carlo(n_trials=100, quiet=True)
+    new_failures = [
+        (i, new_trials["theta0_pitch"][i], new_trials["thrust_scales"][i],
+         new_trials["max_pitch"][i])
+        for i in range(100) if new_trials["max_pitch"][i] >= 15.0
+    ] + [
+        (i, new_trials["theta0_yaw"][i], new_trials["thrust_scales"][i],
+         new_trials["max_yaw"][i], "yaw")
+        for i in range(100) if new_trials["max_yaw"][i] >= 15.0
+    ]
+
     _, _, old_recovered = run_controllability_map(n_pts=15, legacy_physics=True)
     old_map_frac = float(np.mean(old_recovered)) * 100.0
-
-    _, new_settling = cmd_baseline(quiet=True)
-    new_peak, new_recovery = cmd_disturbance(quiet=True)  # crosswind, the new default
-    new_pitch_ok, new_yaw_ok, _ = cmd_monte_carlo(n_trials=100, quiet=True)
     _, _, new_recovered = cmd_controllability_map(quiet=True)
     new_map_frac = float(np.mean(new_recovered)) * 100.0
 
+    old_boundary = find_zero_rate_boundary(legacy_physics=True)
+    new_boundary = find_zero_rate_boundary(legacy_physics=False)
+
+    old_div = open_loop_divergence_time(legacy_physics=True)
+    new_div = open_loop_divergence_time(legacy_physics=False)
+    cmd_open_loop(legacy_physics=False)
+    cmd_open_loop(legacy_physics=True)
+
+    def fmt(v, spec="{:.3f}"):
+        return "N/A" if v is None else spec.format(v)
+
+    def fmt_never(v):
+        return "never*" if v is None else f"{v:.3f}"
+
+    rows = [
+        ("Settling time, baseline 5 deg tip-off (s)", "~0.3", fmt(old_settling), fmt(new_settling)),
+        ("Peak deviation, torque impulse 0.12 N.m (deg)", "1.3", fmt(old_peak_ti), fmt(new_peak_ti)),
+        ("Recovery time, torque impulse 0.12 N.m (s)", "0.4", fmt(old_recovery_ti), fmt(new_recovery_ti)),
+        ("Peak deviation, crosswind gust 5 m/s (deg)", "N/A", "N/A", fmt(new_peak_cw)),
+        ("Recovery time, crosswind gust 5 m/s (s)", "N/A", "N/A", fmt(new_recovery_cw)),
+        ("Monte Carlo recovered, pitch (/100)", "100", f"{old_pitch_ok}", f"{new_pitch_ok}"),
+        ("Monte Carlo recovered, yaw (/100)", "100", f"{old_yaw_ok}", f"{new_yaw_ok}"),
+        ("Controllability map recovered (15x15 grid)", "N/A", f"{old_map_frac:.1f}%", f"{new_map_frac:.1f}%"),
+        ("Controllability boundary at zero rate (deg)", "12-15", fmt(old_boundary, "{:.2f}"), fmt(new_boundary, "{:.2f}")),
+        ("Open-loop divergence time, 5 to 15 deg (s)", "N/A", fmt_never(old_div), fmt_never(new_div)),
+    ]
+
     print()
-    print("Corrected-physics report: old script (paper/tvc_paper_figures.py, its own")
-    print("dynamics AND its own 2-state-filter/PID controller) vs new sim (SPEC.md")
-    print("Section 3.5 physics, core/ controller via ctypes). Not tuned toward either.")
-    print("-" * 92)
-    print(f"{'Metric':<44} {'Old script':>14} {'New sim':>14}")
-    print(f"{'Settling time, baseline 5 deg tip-off (s)':<44} {old_settling:>14.3f} {new_settling:>14.3f}  "
-          f"[new never enters the 5% band during burn; see note below]")
-    print(f"{'Peak deviation, disturbance (deg)':<44} {old_peak:>14.3f} {new_peak:>14.3f}  "
-          f"[old: 0.12 N.m torque impulse; new: 5 m/s crosswind gust -- not the same input]")
-    print(f"{'Recovery time, disturbance (s)':<44} {old_recovery:>14.3f} {new_recovery:>14.3f}  "
-          f"[see above: disturbance kind differs]")
-    print(f"{'Monte Carlo recovered, pitch (/100)':<44} {old_pitch_ok:>14d} {new_pitch_ok:>14d}")
-    print(f"{'Monte Carlo recovered, yaw (/100)':<44} {old_yaw_ok:>14d} {new_yaw_ok:>14d}")
-    print(f"{'Controllability map recovered (15x15 grid)':<44} {old_map_frac:>13.1f}% {new_map_frac:>13.1f}%  "
-          f"[not a paper Table 1 entry; both use the abs(theta)<15deg-during-burn method;")
-    print(f"{'':<44} {'':>14} {'':>14}  "
-          f" identical fraction here does not mean identical trajectories -- see note below]")
-    print("-" * 92)
-    print("Paper Table 1 entries this changes: settling time (paper: ~0.3 s -- the")
-    print("corrected model never settles to within the standard 5% band during the burn,")
-    print("see finding below), peak angular deviation (1.3 deg) and recovery time (0.4 s)")
-    print("for the disturbance test (new disturbance is a crosswind gust, not the old")
-    print("torque impulse -- not a matching comparison; the new mechanism happens to be")
-    print("rejected almost immediately at this vehicle's flight speed), and Kalman filter")
-    print("noise reduction (70-80%, not remeasured here). Monte Carlo recovery rate does")
-    print("not change in kind (near 100/100 in both) because its sampled tip-off angles")
-    print("(0.5-6 deg, zero initial rate) keep the vehicle well inside the region the")
-    print("finding below affects; the controllability map (not a Table 1 entry, included")
-    print("here because it was asked for) samples a wider (0-20 deg, +-50 deg/s) grid.")
+    print("Task 4 report: paper Table 1 vs. old script (paper/tvc_paper_figures.py, its own")
+    print("dynamics and controller) vs. corrected sim (SPEC.md Section 3.5 physics, core/")
+    print("controller via ctypes, same un-retuned Kp/Kd/Q/R throughout). Not tuned toward")
+    print("either column.")
+    print("=" * 102)
+    print(f"{'Metric':<46} {'Paper Table 1':>15} {'Old script':>15} {'Corrected sim':>15}")
+    print("-" * 102)
+    for metric, paper_v, old_v, new_v in rows:
+        print(f"{metric:<46} {paper_v:>15} {old_v:>15} {new_v:>15}")
+    print("=" * 102)
+    print("*never: theta never reaches the threshold within the 3.5 s plotted window.")
     print()
-    print("Note on the controllability map: the recovered fraction came out identical")
-    print("(158/225 for both), which is not a bug -- spot-checking individual grid points")
-    print("shows the two models' trajectories do differ, by up to several degrees at the")
-    print("more severe initial conditions, but max|theta| over the run is usually set by")
-    print("theta0 itself (whenever the closed loop doesn't overshoot past its own starting")
-    print("angle) or by a large early excursion driven by TVC torque authority so much")
-    print("larger than the destabilising moment at low speed that both models resolve it")
-    print("almost identically. Aerodynamic differences need airspeed to build up, which a")
-    print("recovered-or-not classification decided in the first few hundred ms mostly")
-    print("doesn't give them time to do; the baseline scenario's slow burn-long drift is a")
-    print("different regime from this grid's fast, large-excursion transients.")
+
+    print("Which Table 1 entries change: settling time (paper ~0.3 s; corrected sim never")
+    print("enters the standard 5% band during the burn, see finding below -- a degraded-")
+    print("tracking result, not divergence). Torque-impulse peak/recovery barely move (0.071")
+    print("->0.074 deg, 0.145->0.151 s): this disturbance keeps theta small enough that the")
+    print("destabilising moment's magnitude (now correctly signed, see below) contributes")
+    print("little in absolute torque. The crosswind rows have no paper equivalent (new")
+    print("mechanism). Maximum recoverable tilt (paper 12-15 deg) is now reported precisely")
+    print("at zero rate (14.98 deg) instead of read off a coarse grid; both models land on")
+    print("the identical value here, and the controllability-map percentage is also")
+    print("identical (70.2%, 158/225) -- both coincidental, not evidence the sign correction")
+    print("doesn't matter: max|theta| in a successful *closed-loop* recovery is usually set")
+    print("by theta0 itself or an early, TVC-torque-dominated excursion before the (now much")
+    print("stronger, correctly-signed) aerodynamic term has built enough dynamic pressure to")
+    print("matter; spot-checking individual trajectories confirms they differ by several")
+    print("degrees even where the coarse recovered/diverged classification agrees. Kalman")
+    print("noise reduction (70-80%) is not remeasured here.")
     print()
-    print("Finding: the corrected model does not settle cleanly during the burn, unlike")
-    print("the old script. Root cause is Kalman state estimation, not plant instability or")
-    print("the destabilising moment (confirmed by rerunning baseline with cn_alpha_per_rad")
-    print("forced to 0: the same drift persists). SPEC.md Section 3.1's |a|-gate keeps the")
+
+    print("Where the paper's gains fail: open-loop divergence is the clearest case. With no")
+    print("control, zero initial rate, and a 5 deg tip-off, the old script (and legacy-")
+    print("physics reproduction) stays frozen at exactly 5.00 deg forever -- its coded")
+    print("dynamics have no term that acts on theta alone, only a rate-proportional damping")
+    print("that vanishes at zero rate, so nothing ever moves it, despite the manuscript's own")
+    print("prose claiming the tilt 'would diverge... given more time' for a finless,")
+    print("negative-static-margin vehicle. The corrected model actually does this: monotonic,")
+    print("accelerating divergence, reaching 15 deg at t=%.3f s, and confirmed to scale with" % new_div)
+    print("v^2 as expected (thrust_scale 0.7 never reaches 15 deg by burnout; 1.0 reaches it")
+    print("at 1.562 s; 1.3 reaches it at 1.209 s -- higher thrust, higher airspeed, faster")
+    print("divergence). Under closed-loop control the same un-retuned gains mostly cope, but")
+    if new_failures:
+        for f in new_failures:
+            axis = f[4] if len(f) > 4 else "pitch"
+            print(f"  Monte Carlo trial {f[0]} ({axis}): theta0={f[1]:.3f} deg, "
+                  f"thrust_scale={f[2]:.3f}, max|theta|={f[3]:.3f} deg -- DIVERGED "
+                  f"(>=15 deg threshold). Same trial recovers under legacy physics.")
+        print("This is a real, if marginal, loss of stability at an otherwise unremarkable")
+        print("initial condition (near-nominal thrust, a mid-range tip-off) that the paper's")
+        print("own (non-destabilising) dynamics never exposed. Not fixed here: the gains are")
+        print("Kp=8.5, Kd=1.2, unchanged from the paper, and this is exactly the kind of")
+        print("margin loss retuning would paper over rather than reveal.")
+    else:
+        print("no Monte Carlo trial actually diverged (all recovered under both models).")
+    print()
+
+    print("Finding: the corrected model's closed-loop baseline does not settle cleanly")
+    print("during the burn (never enters the 5% band; see table). This is unrelated to the")
+    print("destabilising-moment sign bug fixed earlier in this session (confirmed unchanged")
+    print("by the fix, and previously confirmed unchanged by forcing cn_alpha_per_rad to 0):")
+    print("root cause is Kalman state estimation. SPEC.md Section 3.1's |a|-gate keeps the")
     print("accelerometer update closed for ~94% of the E12-4's burn (specific force sits")
-    print("above the 1.4 g gate ceiling through most of the sustained-thrust plateau, as")
-    print("already noted there). x_hat is seeded at 0 while the true 5 deg tip-off angle")
-    print("is still unknown to the filter; the first, brief gate-open window (thrust")
-    print("ramping through the gate band, ~35-60 ms in) has to correct that entire 5 deg")
-    print("error at once, and the 2-state filter's coupled angle/bias update attributes")
-    print("part of that one-time correction to bias_hat (~-0.3 to -0.4 deg/s here) rather")
-    print("than angle alone. That bias estimate is never revisited once the gate closes,")
-    print("so it contaminates gyro-only dead reckoning for the rest of the burn: the")
-    print("controller still drives x_hat to 0 successfully, but x_hat itself has drifted")
-    print("from true theta, so the true angle drifts too (up to about 1 deg with no sensor")
-    print("noise, several degrees with it, by late burn). This is a state-estimation")
-    print("artifact of combining the paper's own zero-initialized filter with a physically")
-    print("realistic accelerometer gate, not a bug in the core/ port (legacy_check above")
-    print("matches the paper's own gate-always-open behavior to within 0.2%) and not a")
-    print("plant or gain issue. Per 'do not retune,' the filter's initialization and gate")
-    print("are left as specified; this is reported, not corrected.")
+    print("above the 1.4 g gate ceiling through most of the sustained-thrust plateau). x_hat")
+    print("is seeded at 0 while the true 5 deg tip-off is still unknown to the filter; the")
+    print("first, brief gate-open window (thrust ramping through the gate band, ~35-60 ms")
+    print("in) has to correct that entire error at once, and the 2-state filter's coupled")
+    print("update attributes part of it to bias_hat rather than angle. That bias is never")
+    print("revisited once the gate closes, so it contaminates gyro-only dead reckoning for")
+    print("the rest of the burn: the controller drives x_hat to 0 successfully, but x_hat")
+    print("has drifted from true theta, so true theta drifts too. Not a core/ bug")
+    print("(legacy_check matches the paper's gate-always-open behavior to within 0.2%) and")
+    print("not a gain issue; per 'do not retune,' left as specified and reported, not fixed.")
     print()
 
 
