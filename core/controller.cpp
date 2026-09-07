@@ -2,7 +2,7 @@
 
 #include "kalman2d.h"
 #include "pid.h"
-#include "rate_limiter.h"
+#include "servo.h"
 
 namespace tvc {
 
@@ -27,7 +27,8 @@ AxisOut controller_step(AxisState& state, float gyro_deg_s, float accel_tilt_deg
                               params.dt, params.kp, params.ki, params.kd,
                               params.integral_clamp, params.max_deflection);
 
-    float delta = rate_limiter_step(state.delta, pid.u_cmd, params.dt, params.slew_deg_per_s);
+    float delta = servo_step(state.delta, pid.u_cmd, params.dt, params.tau_s,
+                              params.slew_deg_per_s);
 
     return AxisOut{state.x_hat, pid.u_raw, pid.u_cmd, delta, kr.k0, accel_gate_ok};
 }

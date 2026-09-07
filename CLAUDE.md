@@ -32,9 +32,31 @@ Mac, with `pio` installed at that path, before starting those phases.
 
 ## Current phase
 
-Phase 1 (SPEC.md Section 9): repo scaffold, `params.yaml`, `core/`, native unit tests, and
-`parity_test.py`. Phases 2-7 (simulation, vehicle firmware, radio, ground GUI, HIL, flight
-mode) are not started. Do not jump ahead of the current phase without being asked.
+Phase 1 (core/, native tests, parity) is complete. Phase 2 (`sim/`) is substantially
+built: `run_sim.py`'s free-flight scenarios (baseline, open_loop, disturbance,
+controllability_map, monte_carlo), `--legacy-physics` regression mode, and a
+`diagnose_estimator` scenario. Ahead of the strict phase order (SPEC.md Section 9 lists
+these under Phase 6), the static-stand path also exists: `run_sim.py --stand`
+(`StandVehicle`, no aero, mechanical friction), `--thrust-from-log`/`--theta0-from-log`
+to drive it from a decoded log, and `tools/iae_compare.py` (Section 7) with a
+`--self-test` mode that proves the pipeline against a synthetic log before real stand
+data exists. `core/`'s servo model now includes a first-order lag (`servo.tau_s`)
+alongside the slew limit, shared by both vehicle models and the stand.
+
+Current priority: the sim exists primarily to support the static-stand delta-IAE study
+(measured vs. simulated attitude response, `tools/iae_compare.py`), not free-flight
+physics; the free-flight model (`Vehicle`, `controllability_map`, `monte_carlo`) is kept
+for the paper but is not the active focus. Phases 3-5 and 7 (vehicle firmware, radio,
+ground GUI, flight mode) are not started; do not jump ahead of what's been explicitly
+asked.
+
+Open item: the baseline scenario's failure to settle within the standard 5% band is
+root-caused (see `run_sim.py diagnose_estimator`) to the Kalman filter's P0
+initialization giving the bias state as much initial uncertainty as the angle state,
+letting the first accelerometer correction after ignition misattribute part of a large
+initial-angle error to `bias_hat`. A fix (asymmetric P0: small for bias, large for
+angle) has been proposed but not applied; see the session history before changing
+core/'s Kalman initialization convention.
 
 ## Style notes
 - No em dashes in any generated text (paper, comments, docs): flagged as AI-sounding in prior essay reviews.

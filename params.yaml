@@ -17,6 +17,7 @@ kalman:
   accel_gate_g: [0.6, 1.4]   # |a| outside this band -> skip update step (gyro-only); paper §6.7 behaviour
 servo:
   slew_deg_per_s: 500.0   # 60°/0.12 s, paper §3.3
+  tau_s: MEASURE          # first-order lag time constant, s (servo.h); step-response test
   us_per_deg_x: MEASURE   # linkage geometry — from servo_ident tool
   us_per_deg_y: MEASURE
   neutral_us_x: MEASURE
@@ -35,6 +36,13 @@ motor:
   name: "Estes E12-4"
   thrust_curve_file: "sim/data/estes_e12.eng"
   burn_time_s: 2.44                 # paper §6.2
+stand:
+  # 2-DOF static test-stand rig (SPEC.md Section 3.5 --stand note, Section 7 iae_compare.py).
+  # v = 0 on the stand: no aero, so mechanical friction replaces tau_aero/M_q entirely.
+  inertia_kg_m2: MEASURE            # vehicle + gimbal plate about the stand pivot (bifilar)
+  friction_coulomb_Nm: MEASURE      # dry friction torque at the pivot, opposes motion
+  friction_viscous_Nm_s: MEASURE    # rate-proportional friction torque at the pivot
+  arm_pivot_to_gimbal_m: MEASURE    # stand pivot to gimbal distance (replaces r_gimbal_to_com_m)
 staging:
   launch_accel_g: 2.0               # sustained axial accel threshold
   launch_accel_window_s: 0.05       # must persist this long
@@ -112,6 +120,17 @@ sim_overrides:
                                        # for a finless body (no fins to contribute lift
                                        # slope); vehicle.cn_alpha_per_rad above stays
                                        # MEASURE pending an actual OpenRocket Barrowman run
+  stand:
+    # ROUGH ESTIMATES pending the actual stand build and bifilar measurement; stand.*
+    # above stays MEASURE. Only used by run_sim.py --stand.
+    inertia_kg_m2: 0.06                # vehicle + gimbal plate about the pivot: larger
+                                       # than the free-flight CoM-based inertia_pitch_kg_m2
+                                       # above by the parallel-axis shift to an end pivot
+    friction_coulomb_Nm: 0.02          # small dry-friction placeholder for a lightweight
+                                       # bearing/pivot
+    friction_viscous_Nm_s: 0.005       # small viscous-friction placeholder
+    arm_pivot_to_gimbal_m: 0.25        # placeholder, similar order to r_gimbal_to_com_m
+                                       # above but a distinct rig geometry, not derived from it
   control:
     kp: 8.5                           # paper's original value, not retuned (see note above)
     kd: 1.2
@@ -119,6 +138,13 @@ sim_overrides:
     q_angle: 0.001                    # paper's original Q_ANGLE
     q_rate: 0.003                     # paper's original Q_RATE
     r: 0.03                           # paper's original R_MEASURE
+  servo:
+    tau_s: 0.02                       # ROUGH ESTIMATE pending a step-response measurement;
+                                       # servo.tau_s above stays MEASURE. The paper's own
+                                       # "0.12 s / 60 deg" spec describes a full-stroke,
+                                       # slew-dominated move, not the small-signal lag; 20 ms
+                                       # is a plausible fast-hobby-servo placeholder, not a
+                                       # derived value.
   sensors:
     gyro_noise_std_dps: 0.5
     accel_noise_std_deg: 2.5          # already angle-equivalent, not g-units
@@ -146,6 +172,9 @@ sim_overrides:
     rocket_radius_m: 0.022            # paper's ROCKET_RADIUS; contradicts vehicle.diameter_m
     aero_damp_coeff: 0.5              # paper's AERO_DAMP_COEFF
     servo_rate_lim_deg_per_s: 300.0   # paper's SERVO_RATE_LIM; contradicts servo.slew_deg_per_s
+    tau_s: 0.0                        # the paper's servo has no first-order lag, slew only;
+                                       # 0.0 makes servo_step's alpha = 1 exactly (see servo.h),
+                                       # recovering the paper's pre-lag model bit-for-bit
     # Dynamic pressure formula (paper's _alpha): q_dyn = air_density_kg_m3 * thrust_n /
     # mass_kg, i.e. rho*F/m (paper's own comment: "= 0.5*rho*(2F/m)"), not the corrected
     # model's rho*v^2/2. This is a formula, not a stored constant; see

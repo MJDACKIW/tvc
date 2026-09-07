@@ -13,7 +13,7 @@ void tvc_controller_step(
     float gyro_deg_s, float accel_tilt_deg, int accel_gate_ok,
     // ControlParams.
     float dt, float kp, float ki, float kd, float integral_clamp, float max_deflection,
-    float q_angle, float q_rate, float r, float slew_deg_per_s,
+    float q_angle, float q_rate, float r, float slew_deg_per_s, float tau_s,
     // AxisOut.
     float* out_x_hat, float* out_u_raw, float* out_u_cmd, float* out_delta, float* out_K,
     int* out_accel_used);

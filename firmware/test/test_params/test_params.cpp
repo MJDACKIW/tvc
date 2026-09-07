@@ -29,7 +29,7 @@ void test_measure_fields_are_nan(void) {
 }
 
 void test_measure_list_names_every_measure_field(void) {
-    TEST_ASSERT_EQUAL_INT(14, tvc::params::kMeasureCount);
+    TEST_ASSERT_EQUAL_INT(19, tvc::params::kMeasureCount);
     bool found_kp = false;
     for (int i = 0; i < tvc::params::kMeasureCount; ++i) {
         if (std::strcmp(tvc::params::kMeasureList[i], "control.kp") == 0) {

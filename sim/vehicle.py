@@ -15,6 +15,15 @@ run_sim.py --legacy-physics: a regression mode that validates the core/-via-ctyp
 controller port independently of the physics correction above, by checking it still
 reproduces the paper's own baseline/disturbance numbers when run against the paper's own
 (imperfect) physics.
+
+`StandVehicle` models the 2-DOF static test stand (SPEC.md Section 3.5's --stand note,
+Section 7's iae_compare.py companion study): v = 0 always, so there is no aero at all
+(tau_aero = M_q = 0), replaced by mechanical Coulomb + viscous friction at the pivot.
+`ThrustLog`, `load_stand_log`, and the ignition/theta0 helpers below support run_sim.py's
+--thrust-from-log and --theta0-from-log, which drive a stand run from a decoded log
+instead of the NAR thrust curve and the usual theta0=5 deg default; see their docstrings
+for the log .npz schema (decode_log.py does not exist yet, so this is the schema it will
+need to produce, not one it already does).
 """
 import math
 from pathlib import Path
@@ -245,3 +254,136 @@ class LegacyVehicle:
             return self.angular_accel_deg_s2(omega_eval, f, gimbal_deg, extra_torque_nm)
 
         return _rk4_theta_omega(alpha, t, dt, theta_deg, omega_deg_s)
+
+
+class StandVehicle:
+    """2-DOF static test-stand model, for run_sim.py --stand. v = 0 always: no aero at
+    all (tau_aero = M_q = 0 per SPEC.md Section 3.5), replaced by mechanical Coulomb +
+    viscous friction at the pivot. thrust_log, if given (--thrust-from-log), overrides
+    the NAR thrust curve with measured stand-fire data; otherwise this uses the same
+    ThrustCurve as free flight, since the stand fires the same motor.
+    """
+
+    _FRICTION_SIGN_EPS_RAD_S = 0.01  # smooths sign(omega) near zero so RK4 doesn't
+                                      # evaluate a genuine discontinuity across substeps
+
+    def __init__(self, stand_params, motor_params, thrust_log=None):
+        self.moi_kg_m2 = stand_params.inertia_kg_m2
+        self.friction_coulomb_Nm = stand_params.friction_coulomb_Nm
+        self.friction_viscous_Nm_s = stand_params.friction_viscous_Nm_s
+        self.moment_arm_m = stand_params.arm_pivot_to_gimbal_m
+        self.v = 0.0  # no airflow on the stand; kept so run_simulation's shared call
+                      # sites (crosswind_torque_nm's v argument, logging) still work
+
+        self._thrust_log = thrust_log
+        if thrust_log is not None:
+            self.burn_time_s = thrust_log.burn_time_s
+        else:
+            self.thrust = ThrustCurve(motor_params)
+            self.burn_time_s = motor_params.burn_time_s
+
+    def thrust_at(self, t, thrust_scale=1.0):
+        if self._thrust_log is not None:
+            return self._thrust_log.at(t) * thrust_scale
+        return self.thrust.at(t, thrust_scale)
+
+    def sensed_accel_g(self, thrust_n, v):
+        """Not a meaningful quantity on the stand (fixed to the pivot, no translational
+        acceleration to speak of): run_sim.py's --stand path always passes gate_ok=True
+        instead of gating on this. Present only so StandVehicle matches
+        Vehicle/LegacyVehicle's interface.
+        """
+        return 1.0
+
+    def angular_accel_deg_s2(self, omega_deg_s, thrust_n, gimbal_deg, extra_torque_nm):
+        tau_ctrl = thrust_n * self.moment_arm_m * math.sin(math.radians(gimbal_deg))
+        omega_rad_s = math.radians(omega_deg_s)
+        tau_coulomb = (-self.friction_coulomb_Nm
+                       * math.tanh(omega_rad_s / self._FRICTION_SIGN_EPS_RAD_S))
+        tau_viscous = -self.friction_viscous_Nm_s * omega_rad_s
+        return math.degrees((tau_ctrl + tau_coulomb + tau_viscous + extra_torque_nm)
+                             / self.moi_kg_m2)
+
+    def rk4_step(self, t, dt, theta_deg, omega_deg_s, gimbal_deg, extra_torque_nm,
+                 thrust_scale=1.0):
+        def alpha(t_eval, _theta_eval, omega_eval):
+            f = self.thrust_at(t_eval, thrust_scale)
+            return self.angular_accel_deg_s2(omega_eval, f, gimbal_deg, extra_torque_nm)
+
+        return _rk4_theta_omega(alpha, t, dt, theta_deg, omega_deg_s)
+
+
+# ---------------------------------------------------------------------------
+# Decoded stand-fire log ingestion, for run_sim.py --thrust-from-log/--theta0-from-log
+# and tools/iae_compare.py. tools/decode_log.py does not exist yet (Phase 7); this
+# defines the .npz schema it will need to produce, not one it already does. Fields, one
+# array per key except params_hash, all sharing the same time base except params_hash:
+#   time_s:            log timestamps, s (t=0 at some fixed reference, not ignition)
+#   thrust_n:           measured/estimated thrust, N (0 before ignition)
+#   encoder_angle_deg:  stand encoder tilt angle, deg
+#   gyro_dps:           gyro rate reading, deg/s
+#   gimbal_actual_deg:  measured/commanded gimbal deflection, deg (iae_compare.py's
+#                       delta(t) comparison; not used by run_sim.py's --thrust-from-log
+#                       or --theta0-from-log)
+#   params_hash:        scalar string, the params.yaml SHA-256 the firmware logged this
+#                       run against (SPEC.md Section 2); iae_compare.py refuses to run
+#                       if this doesn't match the sim's current tvc_params.PARAMS_HASH
+# Ignition is the first time_s where thrust_n crosses IGNITION_THRUST_N; everything here
+# re-zeroes to that instant, matching how ThrustCurve/*.thrust_at already treat t=0.
+# ---------------------------------------------------------------------------
+
+IGNITION_THRUST_N = 1.0
+
+_STAND_LOG_FIELDS = ("time_s", "thrust_n", "encoder_angle_deg", "gyro_dps",
+                     "gimbal_actual_deg", "params_hash")
+
+
+def load_stand_log(npz_path):
+    data = np.load(npz_path)
+    log = {k: data[k] for k in _STAND_LOG_FIELDS}
+    log["params_hash"] = str(log["params_hash"])
+    return log
+
+
+def find_ignition_index(time_s, thrust_n, threshold_n=IGNITION_THRUST_N):
+    idx = np.where(thrust_n >= threshold_n)[0]
+    if len(idx) == 0:
+        raise ValueError(f"no sample with thrust_n >= {threshold_n} N; can't find ignition")
+    return int(idx[0])
+
+
+class ThrustLog:
+    """Measured thrust vs. time from a decoded stand-fire log (--thrust-from-log),
+    re-zeroed to ignition. Same .at(t) interface as ThrustCurve, minus thrust_scale
+    (measured thrust is not scaled; thrust_scale still applies on top, in StandVehicle).
+    """
+
+    def __init__(self, log):
+        ignition_idx = find_ignition_index(log["time_s"], log["thrust_n"])
+        t_ignition = log["time_s"][ignition_idx]
+        self._time_s = log["time_s"] - t_ignition
+        self._thrust_n = log["thrust_n"]
+        self.burn_time_s = float(self._time_s[-1])
+
+    def at(self, t):
+        if np.isscalar(t):
+            if t < 0.0 or t > self.burn_time_s:
+                return 0.0
+            return float(np.interp(t, self._time_s, self._thrust_n))
+        t = np.asarray(t, dtype=float)
+        f = np.interp(t, self._time_s, self._thrust_n)
+        f[(t < 0.0) | (t > self.burn_time_s)] = 0.0
+        return f
+
+
+def theta0_and_gyro_bias_from_log(log):
+    """--theta0-from-log: encoder angle at ignition (theta0_deg) and the mean gyro
+    reading over the pre-ignition window (gyro_bias_dps), from the same decoded log
+    --thrust-from-log already loaded.
+    """
+    ignition_idx = find_ignition_index(log["time_s"], log["thrust_n"])
+    if ignition_idx == 0:
+        raise ValueError("no pre-ignition samples in log; can't estimate gyro bias")
+    theta0_deg = float(log["encoder_angle_deg"][ignition_idx])
+    gyro_bias_dps = float(np.mean(log["gyro_dps"][:ignition_idx]))
+    return theta0_deg, gyro_bias_dps

@@ -44,15 +44,20 @@ sys.path.insert(0, str(SIM_DIR))
 import tvc_core  # noqa: E402
 import tvc_params  # noqa: E402
 from sensors import SensorModel  # noqa: E402
-from vehicle import LegacyVehicle, Vehicle  # noqa: E402
+from vehicle import (  # noqa: E402
+    LegacyVehicle, StandVehicle, ThrustLog, Vehicle, load_stand_log,
+    theta0_and_gyro_bias_from_log,
+)
 
 FIG_DIR = SIM_DIR / "figures"
 DT_SIM = 0.001  # 1 kHz RK4 step, SPEC.md Section 6.1
 PLOT_END_S = 3.5
 
 
-def build_vehicle(legacy_physics=False):
+def build_vehicle(legacy_physics=False, stand=False, thrust_log=None):
     ov = tvc_params.sim_overrides
+    if stand:
+        return StandVehicle(ov.stand, tvc_params.motor, thrust_log=thrust_log)
     if legacy_physics:
         return LegacyVehicle(ov.legacy_physics, tvc_params.motor)
     return Vehicle(ov.vehicle, tvc_params.vehicle, tvc_params.motor)
@@ -60,13 +65,18 @@ def build_vehicle(legacy_physics=False):
 
 def run_simulation(theta0_deg, rate0_deg_s=0.0, open_loop=False, disturbance=None,
                     thrust_scale=1.0, seed=None, gyro_bias_dps=0.0, t_end=PLOT_END_S,
-                    noise=True, legacy_physics=False):
+                    noise=True, legacy_physics=False, stand=False, thrust_log=None):
     """One single-axis closed-loop run.
 
     disturbance: None, or {"kind": "torque", "torque_Nm", "start_s", "duration_s"}, or
     {"kind": "crosswind", "wind_mps", "start_s", "duration_s"}.
+    stand: SPEC.md Section 3.5's static-stand model (StandVehicle): no aero, mechanical
+    friction, gate always open (no thrust-masks-gravity effect to guard against when the
+    vehicle can't translate). Mutually exclusive with legacy_physics. thrust_log
+    (vehicle.ThrustLog, from --thrust-from-log) overrides the NAR thrust curve; only
+    meaningful with stand=True.
     """
-    vehicle = build_vehicle(legacy_physics)
+    vehicle = build_vehicle(legacy_physics, stand=stand, thrust_log=thrust_log)
     ctl = tvc_params.control
     ov = tvc_params.sim_overrides
 
@@ -82,11 +92,12 @@ def run_simulation(theta0_deg, rate0_deg_s=0.0, open_loop=False, disturbance=Non
     control_dt = ctrl_every * DT_SIM
     slew_deg_per_s = (ov.legacy_physics.servo_rate_lim_deg_per_s if legacy_physics
                        else tvc_params.servo.slew_deg_per_s)
+    tau_s = ov.legacy_physics.tau_s if legacy_physics else ov.servo.tau_s
     axis = tvc_core.ControllerAxis(
         dt=control_dt, kp=ov.control.kp, ki=ctl.ki, kd=ov.control.kd,
         integral_clamp=ctl.integral_clamp_deg_s, max_deflection=ctl.max_deflection_deg,
         q_angle=ov.kalman.q_angle, q_rate=ov.kalman.q_rate, r=ov.kalman.r,
-        slew_deg_per_s=slew_deg_per_s, p0=tvc_params.kalman.p0,
+        slew_deg_per_s=slew_deg_per_s, tau_s=tau_s, p0=tvc_params.kalman.p0,
     )
     gate_min, gate_max = tvc_params.kalman.accel_gate_g
 
@@ -121,7 +132,9 @@ def run_simulation(theta0_deg, rate0_deg_s=0.0, open_loop=False, disturbance=Non
         post_burn = t > vehicle.burn_time_s
         thrust_now = vehicle.thrust_at(t, thrust_scale)
 
-        if legacy_physics:
+        if stand:
+            gate_ok = True  # StandVehicle: no thrust-masks-gravity effect to gate against
+        elif legacy_physics:
             gate_ok = not post_burn  # paper/tvc_paper_figures.py's use_accel proxy
         else:
             a_g = vehicle.sensed_accel_g(thrust_now, vehicle.v)
@@ -394,18 +407,24 @@ def _plot_monte_carlo(name, trials):
 # Scenario commands
 # ---------------------------------------------------------------------------
 
-def cmd_baseline(theta0_deg=5.0, seed=42, legacy_physics=False, quiet=False):
-    log = run_simulation(theta0_deg=theta0_deg, seed=seed, legacy_physics=legacy_physics)
-    burn_time_s = build_vehicle(legacy_physics).burn_time_s
+def cmd_baseline(theta0_deg=5.0, seed=42, legacy_physics=False, stand=False,
+                  thrust_log=None, gyro_bias_dps=0.0, t_end=None, quiet=False):
+    if t_end is None:
+        t_end = thrust_log.burn_time_s if (stand and thrust_log is not None) else PLOT_END_S
+    log = run_simulation(theta0_deg=theta0_deg, seed=seed, legacy_physics=legacy_physics,
+                         stand=stand, thrust_log=thrust_log, gyro_bias_dps=gyro_bias_dps,
+                         t_end=t_end)
+    burn_time_s = build_vehicle(legacy_physics, stand=stand, thrust_log=thrust_log).burn_time_s
     burn = log["time"] <= burn_time_s
     settling = settling_time_s(log["time"][burn], log["true_angle"][burn], theta0=theta0_deg)
     if not quiet:
-        tag = " [legacy-physics]" if legacy_physics else ""
+        tag = " [legacy-physics]" if legacy_physics else (" [stand]" if stand else "")
         print(f"baseline{tag}: theta0={theta0_deg} deg, settling time = {settling:.3f} s "
               f"(5% robust band)")
-    suffix = "_legacy" if legacy_physics else ""
+    suffix = "_legacy" if legacy_physics else ("_stand" if stand else "")
     _save_npz(f"baseline{suffix}", **log)
-    _plot_angle(f"baseline{suffix}", f"Baseline Closed-Loop Response{' (legacy physics)' if legacy_physics else ''}",
+    title_tag = " (legacy physics)" if legacy_physics else (" (stand)" if stand else "")
+    _plot_angle(f"baseline{suffix}", f"Baseline Closed-Loop Response{title_tag}",
                 [(log["time"], log["true_angle"], "true pitch"),
                  (log["time"], log["kalman_angle"], "Kalman estimate")])
     return log, settling
@@ -539,10 +558,215 @@ def cmd_legacy_check():
 
 
 # ---------------------------------------------------------------------------
-# Corrected-physics report: old script (paper/tvc_paper_figures.py, legacy physics and
-# legacy controller) vs new sim (corrected physics, ported controller). NOT a pass/fail
-# against paper Table 1 -- the paper's dynamics are being superseded, not matched.
+# Baseline estimator-offset diagnosis. Corrected physics only (this investigates a
+# state-estimation artifact of the |a| gate meeting a zero-initialized filter, unrelated
+# to which vehicle model is in use). Three variants isolate whether the baseline's
+# failure to settle within the standard 5% band comes from the estimator or the
+# plant/controller interaction:
+#   (a) as-is: core/'s real 2-state filter and PID, unmodified.
+#   (b) perfect state feedback: the PID acts on TRUE theta/omega directly, bypassing the
+#       Kalman filter entirely. If this settles cleanly, the estimator is the cause.
+#   (c) filter on, bias_hat pinned to 0 after every update: isolates bias misattribution
+#       specifically, leaving the angle estimate's own predict/update dynamics untouched.
 # ---------------------------------------------------------------------------
+
+def _perfect_feedback_pid_step(state, x_true, true_rate, dt, kp, ki, kd, integral_clamp,
+                                max_deflection):
+    """Exact reimplementation of core/pid.cpp's pid_step, acting on true state instead of
+    the Kalman estimate. Used only by run_baseline_variant's 'perfect_feedback' case, to
+    isolate the estimator from the controller/plant; not exposed via FFI and not part of
+    the parity-tested path, so kept deliberately identical to core/pid.cpp's math rather
+    than approximated.
+    """
+    e = 0.0 - x_true
+    d_error = -true_rate
+    if not state["saturated"]:
+        state["integral"] += e * dt
+    state["integral"] = max(-integral_clamp, min(integral_clamp, state["integral"]))
+    u = kp * e + ki * state["integral"] + kd * d_error
+    u_cmd = max(-max_deflection, min(max_deflection, u))
+    state["saturated"] = (u != u_cmd)
+    return u_cmd
+
+
+def _servo_step_py(state, u_cmd, dt, tau_s, slew_deg_per_s):
+    """Exact reimplementation of core/servo.cpp's servo_step, for the same
+    'perfect_feedback' diagnostic case as above -- kept identical to core/'s actuator
+    model so the three diagnostic variants differ only in the estimator, not the servo.
+    """
+    alpha = 1.0 - math.exp(-dt / tau_s) if tau_s > 0.0 else 1.0
+    desired_step = alpha * (u_cmd - state["delta"])
+    max_step = slew_deg_per_s * dt
+    step = max(-max_step, min(max_step, desired_step))
+    state["delta"] += step
+    return state["delta"]
+
+
+def run_baseline_variant(variant, theta0_deg=5.0, seed=42, noise=True, t_end=PLOT_END_S):
+    """variant: 'as_is', 'perfect_feedback', or 'bias_frozen'. Corrected physics.
+
+    Deliberately a separate, simpler loop from run_simulation rather than adding more
+    branches to it: this is a one-off diagnostic (no disturbance, no open_loop, no
+    legacy_physics), and folding it into the general-purpose loop would obscure both.
+    """
+    assert variant in ("as_is", "perfect_feedback", "bias_frozen")
+    ov = tvc_params.sim_overrides
+    ctl = tvc_params.control
+    vehicle = build_vehicle(legacy_physics=False)
+
+    ctrl_every = max(1, int(round(1.0 / (ctl.rate_hz * DT_SIM))))
+    control_dt = ctrl_every * DT_SIM
+    slew_deg_per_s = tvc_params.servo.slew_deg_per_s
+    gate_min, gate_max = tvc_params.kalman.accel_gate_g
+
+    n = int(round(t_end / DT_SIM))
+    rng = np.random.default_rng(seed)
+    sensors = SensorModel(
+        gyro_noise_std_dps=ov.sensors.gyro_noise_std_dps if noise else 0.0,
+        accel_noise_std_deg=ov.sensors.accel_noise_std_deg if noise else 0.0,
+        gyro_drift_rate_dps_per_s=ov.sensors.gyro_drift_rate_dps_per_s,
+        rng=rng, n_steps=n, gyro_bias_dps=0.0,
+    )
+
+    if variant == "perfect_feedback":
+        axis = None
+        pfb_state = {"integral": 0.0, "saturated": False, "delta": 0.0}
+    else:
+        axis = tvc_core.ControllerAxis(
+            dt=control_dt, kp=ov.control.kp, ki=ctl.ki, kd=ov.control.kd,
+            integral_clamp=ctl.integral_clamp_deg_s, max_deflection=ctl.max_deflection_deg,
+            q_angle=ov.kalman.q_angle, q_rate=ov.kalman.q_rate, r=ov.kalman.r,
+            slew_deg_per_s=slew_deg_per_s, tau_s=ov.servo.tau_s, p0=tvc_params.kalman.p0,
+        )
+
+    theta = float(theta0_deg)
+    omega = 0.0
+    gimbal_deg = 0.0
+    last_x_hat = float(theta0_deg) if variant == "perfect_feedback" else 0.0
+    last_cmd = 0.0
+    last_bias_hat = 0.0
+
+    log = {k: np.zeros(n) for k in
+           ("time", "true_angle", "true_rate", "kalman_angle", "bias_hat", "gimbal_actual")}
+
+    for i in range(n):
+        t = i * DT_SIM
+        post_burn = t > vehicle.burn_time_s
+        thrust_now = vehicle.thrust_at(t)
+        a_g = vehicle.sensed_accel_g(thrust_now, vehicle.v)
+        gate_ok = gate_min <= a_g <= gate_max
+
+        gyro_reading, accel_reading = sensors.sample(i, omega, theta, DT_SIM, post_burn)
+
+        if i % ctrl_every == 0:
+            if variant == "perfect_feedback":
+                last_x_hat = theta
+                if post_burn:
+                    last_cmd = 0.0
+                    max_step = slew_deg_per_s * control_dt
+                    gimbal_deg = max(gimbal_deg - max_step, min(gimbal_deg + max_step, 0.0))
+                    pfb_state["delta"] = gimbal_deg
+                else:
+                    last_cmd = _perfect_feedback_pid_step(
+                        pfb_state, theta, omega, control_dt, ov.control.kp, ctl.ki,
+                        ov.control.kd, ctl.integral_clamp_deg_s, ctl.max_deflection_deg)
+                    gimbal_deg = _servo_step_py(pfb_state, last_cmd, control_dt,
+                                                 ov.servo.tau_s, slew_deg_per_s)
+            else:
+                out = axis.step(gyro_reading, accel_reading, accel_gate_ok=gate_ok)
+                last_x_hat = out["x_hat"]
+                last_bias_hat = axis._bias_hat.value
+                if variant == "bias_frozen":
+                    axis._bias_hat.value = 0.0  # pinned for every subsequent predict
+                if post_burn:
+                    last_cmd = 0.0
+                    max_step = slew_deg_per_s * control_dt
+                    gimbal_deg = max(gimbal_deg - max_step, min(gimbal_deg + max_step, 0.0))
+                else:
+                    last_cmd = out["u_cmd"]
+                    gimbal_deg = out["delta"]
+
+        log["time"][i] = t
+        log["true_angle"][i] = theta
+        log["true_rate"][i] = omega
+        log["kalman_angle"][i] = last_x_hat
+        log["bias_hat"][i] = last_bias_hat
+        log["gimbal_actual"][i] = gimbal_deg
+
+        theta, omega = vehicle.rk4_step(t, DT_SIM, theta, omega, gimbal_deg, 0.0, 1.0)
+
+    return log
+
+
+def _plot_estimator_diagnosis(name, log):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axs = plt.subplots(2, 1, figsize=(9, 8), sharex=True)
+    err = log["kalman_angle"] - log["true_angle"]
+    axs[0].plot(log["time"], err, color="tab:red", lw=1.2)
+    axs[0].axhline(0.0, color="grey", lw=0.6)
+    axs[0].set_ylabel("x_hat - true theta (deg)")
+    axs[0].set_title("Estimate error, variant (a) as-is")
+    axs[0].grid(alpha=0.3)
+
+    axs[1].plot(log["time"], log["bias_hat"], color="tab:blue", lw=1.2)
+    axs[1].axhline(0.0, color="grey", lw=0.6)
+    axs[1].set_ylabel("bias_hat (deg/s)")
+    axs[1].set_xlabel("Time (s)")
+    axs[1].grid(alpha=0.3)
+
+    fig.suptitle(f"Estimator diagnosis\nparams hash {tvc_params.PARAMS_HASH[:12]}")
+    fig.tight_layout()
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIG_DIR / f"{name}.png", dpi=150)
+    plt.close(fig)
+
+
+def cmd_diagnose_estimator(theta0_deg=5.0, seed=42):
+    variants = [
+        ("as_is", "(a) as-is"),
+        ("perfect_feedback", "(b) perfect state feedback"),
+        ("bias_frozen", "(c) filter on, bias_hat pinned to 0"),
+    ]
+    logs = {}
+    burn_time_s = build_vehicle(legacy_physics=False).burn_time_s
+    print()
+    print("Baseline estimator-offset diagnosis: corrected physics, theta0=5 deg, seed=42,")
+    print("noise on. Settling uses the standard 5% robust band; steady angle is true theta")
+    print("over t in [1.5, 2.4] s (burn ends at %.2f s)." % burn_time_s)
+    print("-" * 78)
+    print(f"{'Variant':<38} {'settling (s)':>13} {'mean theta':>12} {'range':>18}")
+    for variant, label in variants:
+        log = run_baseline_variant(variant, theta0_deg=theta0_deg, seed=seed)
+        logs[variant] = log
+        burn = log["time"] <= burn_time_s
+        settling = settling_time_s(log["time"][burn], log["true_angle"][burn], theta0=theta0_deg)
+        window = (log["time"] >= 1.5) & (log["time"] <= 2.4)
+        mean_theta = float(np.mean(log["true_angle"][window]))
+        min_theta = float(np.min(log["true_angle"][window]))
+        max_theta = float(np.max(log["true_angle"][window]))
+        print(f"{label:<38} {settling:>13.3f} {mean_theta:>12.4f} "
+              f"[{min_theta:>6.3f}, {max_theta:>6.3f}]")
+    print("-" * 78)
+    print()
+
+    _save_npz("diagnose_estimator", **{f"{v}_{k}": arr for v in logs for k, arr in logs[v].items()})
+    _plot_estimator_diagnosis("diagnose_estimator", logs["as_is"])
+    _plot_angle("diagnose_estimator_theta",
+                "Baseline estimator diagnosis: true theta per variant",
+                [(logs[v]["time"], logs[v]["true_angle"], label) for v, label in variants])
+
+    print("Finding: compare (a) against (b). If (b) settles cleanly within the 5% band")
+    print("while (a) does not, the estimator (not the plant, not the PID gains) is the")
+    print("cause. Compare (a) against (c): if (c) also settles cleanly, the specific")
+    print("mechanism is bias misattribution (bias_hat drifting off zero and contaminating")
+    print("gyro-only dead reckoning once the accel gate closes), not the angle estimate's")
+    print("own predict/update dynamics. See the plotted (a) estimate error and bias_hat.")
+    print()
+    return logs
+
 
 def cmd_report():
     """Task 4: baseline, open_loop, disturbance (crosswind gust and the paper's own
@@ -710,10 +934,23 @@ def main():
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("scenario", choices=[
         "baseline", "disturbance", "monte_carlo", "open_loop", "controllability_map",
-        "legacy_check", "all"])
+        "legacy_check", "diagnose_estimator", "all"])
     parser.add_argument("--legacy-physics", action="store_true",
                          help="Use LegacyVehicle (exact paper/tvc_paper_figures.py dynamics) "
                               "instead of the corrected physics model.")
+    parser.add_argument("--stand", action="store_true",
+                         help="Use StandVehicle (SPEC.md Section 3.5): no aero, mechanical "
+                              "friction, for the static-stand delta-IAE study. Mutually "
+                              "exclusive with --legacy-physics. Only the baseline scenario "
+                              "supports it.")
+    parser.add_argument("--thrust-from-log", metavar="NPZ",
+                         help="Drive --stand with measured thrust from a decoded stand-fire "
+                              "log (see vehicle.load_stand_log for the .npz schema) instead "
+                              "of the NAR curve.")
+    parser.add_argument("--theta0-from-log", action="store_true",
+                         help="With --thrust-from-log, take theta0 from the log's encoder "
+                              "angle at ignition and gyro_bias_dps from its pre-ignition "
+                              "gyro mean, instead of the usual theta0=5 deg default.")
     dist_group = parser.add_mutually_exclusive_group()
     dist_group.add_argument("--crosswind", action="store_true",
                              help="disturbance scenario: 5 m/s crosswind gust (default "
@@ -723,14 +960,34 @@ def main():
                                   "paper's original; forced when --legacy-physics)")
     args = parser.parse_args()
 
+    if args.stand and args.legacy_physics:
+        raise SystemExit("--stand and --legacy-physics are mutually exclusive")
+    if args.theta0_from_log and not args.thrust_from_log:
+        raise SystemExit("--theta0-from-log requires --thrust-from-log (same log file)")
+    if args.thrust_from_log and not args.stand:
+        raise SystemExit("--thrust-from-log requires --stand")
+
     disturbance = None
     if args.torque_impulse:
         disturbance = TORQUE_DISTURBANCE
     elif args.crosswind:
         disturbance = CROSSWIND_DISTURBANCE
 
+    thrust_log = None
+    theta0_deg, gyro_bias_dps = 5.0, 0.0
+    if args.thrust_from_log:
+        log = load_stand_log(args.thrust_from_log)
+        thrust_log = ThrustLog(log)
+        if args.theta0_from_log:
+            theta0_deg, gyro_bias_dps = theta0_and_gyro_bias_from_log(log)
+
     if args.scenario == "baseline":
-        cmd_baseline(legacy_physics=args.legacy_physics)
+        cmd_baseline(theta0_deg=theta0_deg, gyro_bias_dps=gyro_bias_dps,
+                     legacy_physics=args.legacy_physics, stand=args.stand,
+                     thrust_log=thrust_log)
+    elif args.scenario != "baseline" and (args.stand or args.thrust_from_log):
+        raise SystemExit(f"--stand/--thrust-from-log only support the baseline scenario, "
+                          f"not {args.scenario!r}")
     elif args.scenario == "disturbance":
         cmd_disturbance(legacy_physics=args.legacy_physics, disturbance=disturbance)
     elif args.scenario == "monte_carlo":
@@ -742,6 +999,8 @@ def main():
     elif args.scenario == "legacy_check":
         ok = cmd_legacy_check()
         sys.exit(0 if ok else 1)
+    elif args.scenario == "diagnose_estimator":
+        cmd_diagnose_estimator()
     elif args.scenario == "all":
         cmd_report()
 

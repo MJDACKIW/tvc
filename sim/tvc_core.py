@@ -1,4 +1,4 @@
-"""ctypes bridge to core/libtvccore (kalman2d + pid + rate_limiter via controller_step).
+"""ctypes bridge to core/libtvccore (kalman2d + pid + servo via controller_step).
 See SPEC.md Section 6: "The controller is core/ via ctypes... A pure-Python fallback is
 not allowed in the main path." This is the one place that FFI contract is encoded; both
 sim/run_sim.py and tools/parity_test.py import it, so there is exactly one ctypes call
@@ -38,10 +38,10 @@ def _load():
         # Inputs: gyro_deg_s, accel_tilt_deg, accel_gate_ok
         ctypes.c_float, ctypes.c_float, ctypes.c_int,
         # ControlParams: dt, kp, ki, kd, integral_clamp, max_deflection, q_angle, q_rate,
-        # r, slew_deg_per_s
+        # r, slew_deg_per_s, tau_s
         ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
         ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
-        ctypes.c_float, ctypes.c_float,
+        ctypes.c_float, ctypes.c_float, ctypes.c_float,
         # AxisOut: x_hat, u_raw, u_cmd, delta, K, accel_used
         c_float_p, c_float_p, c_float_p, c_float_p, c_float_p, c_int_p,
     ]
@@ -55,7 +55,7 @@ class ControllerAxis:
     calls tvc_controller_step via ctypes on every step() call."""
 
     def __init__(self, dt, kp, ki, kd, integral_clamp, max_deflection, q_angle, q_rate,
-                 r, slew_deg_per_s, p0=0.0):
+                 r, slew_deg_per_s, tau_s, p0=0.0):
         self._lib = _load()
         self._dt = ctypes.c_float(dt)
         self._kp = ctypes.c_float(kp)
@@ -67,6 +67,7 @@ class ControllerAxis:
         self._q_rate = ctypes.c_float(q_rate)
         self._r = ctypes.c_float(r)
         self._slew_deg_per_s = ctypes.c_float(slew_deg_per_s)
+        self._tau_s = ctypes.c_float(tau_s)
 
         # AxisState, persistent across step() calls. core/controller.h's AxisState
         # defaults P's diagonal to 0.0 (an arbitrary struct default, not params.yaml's
@@ -102,7 +103,7 @@ class ControllerAxis:
             int(accel_gate_ok),
             self._dt, self._kp, self._ki, self._kd,
             self._integral_clamp, self._max_deflection,
-            self._q_angle, self._q_rate, self._r, self._slew_deg_per_s,
+            self._q_angle, self._q_rate, self._r, self._slew_deg_per_s, self._tau_s,
             ctypes.byref(out_x_hat), ctypes.byref(out_u_raw),
             ctypes.byref(out_u_cmd), ctypes.byref(out_delta),
             ctypes.byref(out_K), ctypes.byref(out_accel_used),

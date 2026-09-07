@@ -36,6 +36,7 @@ struct ControlParams {
     float q_rate;
     float r;
     float slew_deg_per_s;
+    float tau_s;  // servo first-order lag time constant, seconds (servo.h)
 };
 
 AxisOut controller_step(AxisState& state, float gyro_deg_s, float accel_tilt_deg,

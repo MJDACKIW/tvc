@@ -39,7 +39,7 @@ tvc/
 │   ├── params.h                 # GENERATED — do not edit by hand
 │   ├── kalman2d.h/.cpp          # 2-state (angle, gyro bias) Kalman filter, one instance per axis (paper §3.2)
 │   ├── pid.h/.cpp                # discrete PID with saturation + anti-windup (paper §3.1, A.3)
-│   ├── rate_limiter.h/.cpp      # servo slew model, 0.12 s / 60° (paper §3.3)
+│   ├── servo.h/.cpp             # servo model: first-order lag (tau MEASURE) + slew, 0.12 s / 60° (§3.3)
 │   ├── attitude_from_accel.h    # accelerometer tilt z_k per axis
 │   ├── controller.h/.cpp        # ties KF + PID + limiter per axis; the one function both sides call
 │   └── ffi.h/.cpp               # extern "C" wrapper so Python can load core as a shared library
@@ -230,16 +230,23 @@ loop (confirmed independently while porting this: the 1-state-filter architectur
 earlier draft of this section specified diverges with the paper's gains once noise is
 on). Do not reintroduce a finite-difference derivative without flagging it.
 
-### 3.3 Servo slew model (paper §3.3, §6.6)
-$$\delta_{k} = \delta_{k-1} + \operatorname{clamp}\!\left(u_{cmd,k} - \delta_{k-1},\; \pm\,\dot\delta_{max}\Delta t\right)$$
-In firmware this is applied to the *command* sent to the servo (so the logged command is what
-the sim models). In the sim it is the actuator model. Same function, same numbers.
+### 3.3 Servo model (paper §3.3, §6.6, `servo.h`)
+$$\delta_k = \delta_{k-1} + \operatorname{clamp}\!\left(\alpha\,(u_{cmd,k}-\delta_{k-1}),\;
+\pm\,\dot\delta_{max}\Delta t\right), \qquad \alpha = 1 - e^{-\Delta t / \tau}$$
+A first-order lag (time constant $\tau$, `servo.tau_s`, MEASURE) combined with the paper's
+hard slew limit ($\dot\delta_{max}=500\deg/s$): whichever step is smaller governs. A large
+error is slew-limited exactly as the paper's own model (recovered exactly as $\tau\to0$,
+since the lag step then always exceeds the slew step); a small error near the target decays
+like a first-order system instead of slewing at full rate and stopping dead, which the
+slew-only model could not represent. In firmware this is applied to the *command* sent to
+the servo (so the logged command is what the sim models). In the sim it is the actuator
+model. Same function, same numbers, in both.
 
 ### 3.4 `controller.h` API
 ```cpp
 struct AxisState { float x_hat, bias_hat, p00, p01, p10, p11, integral, delta; bool saturated; };
 struct AxisOut   { float x_hat, u_raw, u_cmd, delta, K; bool accel_used; };
-struct ControlParams { float dt, kp, ki, kd, integral_clamp, max_deflection, q_angle, q_rate, r, slew_deg_per_s; };
+struct ControlParams { float dt, kp, ki, kd, integral_clamp, max_deflection, q_angle, q_rate, r, slew_deg_per_s, tau_s; };
 AxisOut controller_step(AxisState&, float gyro_deg_s, float accel_tilt_deg, bool accel_gate_ok, const ControlParams&);
 ```
 `K` in `AxisOut` is $k_0$, the angle-measurement gain from 3.1 (0 whenever `accel_used` is

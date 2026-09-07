@@ -45,6 +45,7 @@ FIXTURE_PARAMS = {
     "q_rate": 0.05,
     "r": 0.4,
     "slew_deg_per_s": 500.0,
+    "tau_s": 0.03,
 }
 
 
@@ -88,6 +89,7 @@ def write_fixture_header(path, gyro, accel_tilt, gate, params):
         f"constexpr float kParityQRate = {f32(params['q_rate'])};",
         f"constexpr float kParityR = {f32(params['r'])};",
         f"constexpr float kParitySlewDegPerS = {f32(params['slew_deg_per_s'])};",
+        f"constexpr float kParityTauS = {f32(params['tau_s'])};",
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,7 +102,7 @@ def run_ctypes_side(gyro, accel_tilt, gate, params):
         dt=params["dt"], kp=params["kp"], ki=params["ki"], kd=params["kd"],
         integral_clamp=params["integral_clamp"], max_deflection=params["max_deflection"],
         q_angle=params["q_angle"], q_rate=params["q_rate"], r=params["r"],
-        slew_deg_per_s=params["slew_deg_per_s"],
+        slew_deg_per_s=params["slew_deg_per_s"], tau_s=params["tau_s"],
     )
     results = []
     for i in range(len(gyro)):

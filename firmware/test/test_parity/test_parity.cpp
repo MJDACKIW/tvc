@@ -18,6 +18,7 @@ void test_parity_trace_emits_csv(void) {
         kParityDt,            kParityKp,           kParityKi,
         kParityKd,            kParityIntegralClamp, kParityMaxDeflection,
         kParityQAngle,        kParityQRate,        kParityR,           kParitySlewDegPerS,
+        kParityTauS,
     };
 
     for (int i = 0; i < kParityTraceLen; ++i) {
