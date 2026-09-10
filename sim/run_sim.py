@@ -93,11 +93,14 @@ def run_simulation(theta0_deg, rate0_deg_s=0.0, open_loop=False, disturbance=Non
     slew_deg_per_s = (ov.legacy_physics.servo_rate_lim_deg_per_s if legacy_physics
                        else tvc_params.servo.slew_deg_per_s)
     tau_s = ov.legacy_physics.tau_s if legacy_physics else ov.servo.tau_s
+    p0_angle = ov.legacy_physics.p0_angle if legacy_physics else tvc_params.kalman.p0_angle
+    p0_bias = ov.legacy_physics.p0_bias if legacy_physics else tvc_params.kalman.p0_bias
     axis = tvc_core.ControllerAxis(
         dt=control_dt, kp=ov.control.kp, ki=ctl.ki, kd=ov.control.kd,
         integral_clamp=ctl.integral_clamp_deg_s, max_deflection=ctl.max_deflection_deg,
         q_angle=ov.kalman.q_angle, q_rate=ov.kalman.q_rate, r=ov.kalman.r,
-        slew_deg_per_s=slew_deg_per_s, tau_s=tau_s, p0=tvc_params.kalman.p0,
+        slew_deg_per_s=slew_deg_per_s, tau_s=tau_s,
+        p0_angle=p0_angle, p0_bias=p0_bias,
     )
     gate_min, gate_max = tvc_params.kalman.accel_gate_g
 
@@ -636,7 +639,8 @@ def run_baseline_variant(variant, theta0_deg=5.0, seed=42, noise=True, t_end=PLO
             dt=control_dt, kp=ov.control.kp, ki=ctl.ki, kd=ov.control.kd,
             integral_clamp=ctl.integral_clamp_deg_s, max_deflection=ctl.max_deflection_deg,
             q_angle=ov.kalman.q_angle, q_rate=ov.kalman.q_rate, r=ov.kalman.r,
-            slew_deg_per_s=slew_deg_per_s, tau_s=ov.servo.tau_s, p0=tvc_params.kalman.p0,
+            slew_deg_per_s=slew_deg_per_s, tau_s=ov.servo.tau_s,
+            p0_angle=tvc_params.kalman.p0_angle, p0_bias=tvc_params.kalman.p0_bias,
         )
 
     theta = float(theta0_deg)

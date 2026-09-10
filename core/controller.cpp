@@ -33,4 +33,16 @@ AxisOut controller_step(AxisState& state, float gyro_deg_s, float accel_tilt_deg
     return AxisOut{state.x_hat, pid.u_raw, pid.u_cmd, delta, kr.k0, accel_gate_ok};
 }
 
+void controller_init(AxisState& state, float p0_angle, float p0_bias) {
+    state.x_hat = 0.0f;
+    state.bias_hat = 0.0f;
+    state.p00 = p0_angle;
+    state.p01 = 0.0f;
+    state.p10 = 0.0f;
+    state.p11 = p0_bias;
+    state.integral = 0.0f;
+    state.delta = 0.0f;
+    state.saturated = false;
+}
+
 }  // namespace tvc

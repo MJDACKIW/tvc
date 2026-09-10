@@ -18,4 +18,9 @@ void tvc_controller_step(
     float* out_x_hat, float* out_u_raw, float* out_u_cmd, float* out_delta, float* out_K,
     int* out_accel_used);
 
+// See controller.h's controller_init. AxisState out-params only; no ControlParams/AxisOut.
+void tvc_controller_init(float* x_hat, float* bias_hat, float* p00, float* p01,
+                          float* p10, float* p11, float* integral, float* delta,
+                          int* saturated, float p0_angle, float p0_bias);
+
 }  // extern "C"

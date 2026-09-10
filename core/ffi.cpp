@@ -44,3 +44,19 @@ extern "C" void tvc_controller_step(
     *out_K = out.K;
     *out_accel_used = out.accel_used ? 1 : 0;
 }
+
+extern "C" void tvc_controller_init(float* x_hat, float* bias_hat, float* p00, float* p01,
+                                     float* p10, float* p11, float* integral, float* delta,
+                                     int* saturated, float p0_angle, float p0_bias) {
+    tvc::AxisState state;
+    tvc::controller_init(state, p0_angle, p0_bias);
+    *x_hat = state.x_hat;
+    *bias_hat = state.bias_hat;
+    *p00 = state.p00;
+    *p01 = state.p01;
+    *p10 = state.p10;
+    *p11 = state.p11;
+    *integral = state.integral;
+    *delta = state.delta;
+    *saturated = state.saturated ? 1 : 0;
+}

@@ -50,13 +50,21 @@ for the paper but is not the active focus. Phases 3-5 and 7 (vehicle firmware, r
 ground GUI, flight mode) are not started; do not jump ahead of what's been explicitly
 asked.
 
-Open item: the baseline scenario's failure to settle within the standard 5% band is
+Resolved: the baseline scenario's failure to settle within the standard 5% band was
 root-caused (see `run_sim.py diagnose_estimator`) to the Kalman filter's P0
 initialization giving the bias state as much initial uncertainty as the angle state,
 letting the first accelerometer correction after ignition misattribute part of a large
-initial-angle error to `bias_hat`. A fix (asymmetric P0: small for bias, large for
-angle) has been proposed but not applied; see the session history before changing
-core/'s Kalman initialization convention.
+initial-angle error to `bias_hat`. Fixed via `core/controller.h`'s `controller_init`
+(asymmetric P0: `kalman.p0_angle`/`p0_bias` in params.yaml, small for bias, large for
+angle), the one place both sim and firmware now seed `AxisState`. Verified: the
+baseline's steady-state drift dropped from ~2.9 deg to ~0.5 deg (matching the
+bias-frozen diagnostic variant almost exactly); the remaining ~0.5 deg is gyro white
+noise integrated over the long predict-only stretch while the accelerometer gate is
+closed, which is intrinsic to gyro-only dead reckoning and not fixable by
+initialization. `--legacy-physics` keeps the paper's original symmetric P0 = I
+(`sim_overrides.legacy_physics.p0_angle`/`p0_bias`, both 1.0) since its own gate never
+closes for an extended stretch and was never exposed to this failure mode; `legacy_check`
+still passes at the same <1% (in fact unchanged: 0.22%/0.20%/0.22%).
 
 ## Style notes
 - No em dashes in any generated text (paper, comments, docs): flagged as AI-sounding in prior essay reviews.

@@ -14,6 +14,7 @@ void tearDown(void) {}
 
 void test_parity_trace_emits_csv(void) {
     tvc::AxisState state;
+    tvc::controller_init(state, kParityP0Angle, kParityP0Bias);
     tvc::ControlParams params{
         kParityDt,            kParityKp,           kParityKi,
         kParityKd,            kParityIntegralClamp, kParityMaxDeflection,

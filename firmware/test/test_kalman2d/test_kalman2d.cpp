@@ -75,11 +75,41 @@ void test_gate_false_holds_p_update_but_still_predicts_variance_growth(void) {
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 0.5003f, s.p11);
 }
 
+void test_asymmetric_p0_reduces_bias_misattribution_on_large_correction(void) {
+    // Reproduces the mechanism run_sim.py's diagnose_estimator found: a single large
+    // one-time accelerometer correction (standing in for a real initial tip-off angle,
+    // corrected in one brief early gate-open window) with zero true rate. A 2-state
+    // filter given equal initial uncertainty for angle and bias has no reason to prefer
+    // one explanation over the other and can misattribute a meaningful share of the
+    // correction to bias_hat; giving the bias state much lower initial uncertainty
+    // (params.yaml's kalman.p0_angle/p0_bias, vs. the old shared p0) should attribute
+    // far less of it there.
+    tvc::Kalman2DState symmetric;
+    symmetric.p00 = 1.0f;
+    symmetric.p11 = 1.0f;
+    tvc::kalman2d_update(symmetric, /*gyro=*/0.0f, /*accel=*/5.0f, /*dt=*/0.1f,
+                          /*q_angle=*/0.001f, /*q_rate=*/0.003f, /*r=*/0.03f,
+                          /*gate_ok=*/true);
+
+    tvc::Kalman2DState asymmetric;
+    asymmetric.p00 = 25.0f;
+    asymmetric.p11 = 0.01f;
+    tvc::kalman2d_update(asymmetric, /*gyro=*/0.0f, /*accel=*/5.0f, /*dt=*/0.1f,
+                          /*q_angle=*/0.001f, /*q_rate=*/0.003f, /*r=*/0.03f,
+                          /*gate_ok=*/true);
+
+    TEST_ASSERT_TRUE(std::fabs(asymmetric.bias) < std::fabs(symmetric.bias));
+    // Not just smaller: close to zero (the bias state trusts its own prior over one
+    // ambiguous correction), unlike the symmetric case's real misattribution.
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, asymmetric.bias);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_predict_advances_angle_only_when_gate_false);
     RUN_TEST(test_update_converges_to_measurement);
     RUN_TEST(test_bias_estimation_tracks_constant_gyro_bias);
     RUN_TEST(test_gate_false_holds_p_update_but_still_predicts_variance_growth);
+    RUN_TEST(test_asymmetric_p0_reduces_bias_misattribution_on_large_correction);
     return UNITY_END();
 }

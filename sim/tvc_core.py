@@ -46,6 +46,16 @@ def _load():
         c_float_p, c_float_p, c_float_p, c_float_p, c_float_p, c_int_p,
     ]
     lib.tvc_controller_step.restype = None
+
+    lib.tvc_controller_init.argtypes = [
+        # AxisState, out: x_hat, bias_hat, p00, p01, p10, p11, integral, delta, saturated
+        c_float_p, c_float_p, c_float_p, c_float_p, c_float_p, c_float_p,
+        c_float_p, c_float_p, c_int_p,
+        # p0_angle, p0_bias
+        ctypes.c_float, ctypes.c_float,
+    ]
+    lib.tvc_controller_init.restype = None
+
     _lib = lib
     return _lib
 
@@ -55,7 +65,7 @@ class ControllerAxis:
     calls tvc_controller_step via ctypes on every step() call."""
 
     def __init__(self, dt, kp, ki, kd, integral_clamp, max_deflection, q_angle, q_rate,
-                 r, slew_deg_per_s, tau_s, p0=0.0):
+                 r, slew_deg_per_s, tau_s, p0_angle=0.0, p0_bias=0.0):
         self._lib = _load()
         self._dt = ctypes.c_float(dt)
         self._kp = ctypes.c_float(kp)
@@ -69,19 +79,28 @@ class ControllerAxis:
         self._slew_deg_per_s = ctypes.c_float(slew_deg_per_s)
         self._tau_s = ctypes.c_float(tau_s)
 
-        # AxisState, persistent across step() calls. core/controller.h's AxisState
-        # defaults P's diagonal to 0.0 (an arbitrary struct default, not params.yaml's
-        # kalman.p0); seed it from p0 here since that field only has meaning to a caller.
-        # P0 = eye(2) * p0, matching the paper's kal_P = np.eye(2) initialization.
+        # AxisState, persistent across step() calls. Seeded via tvc_controller_init
+        # (core/controller.h's controller_init), the one shared place both this and
+        # firmware initialize from, rather than setting these fields directly here: an
+        # earlier version did that inline, duplicating the P0 = diag(p0_angle, p0_bias)
+        # convention instead of enforcing it in shared code.
         self._x_hat = ctypes.c_float(0.0)
         self._bias_hat = ctypes.c_float(0.0)
-        self._p00 = ctypes.c_float(p0)
+        self._p00 = ctypes.c_float(0.0)
         self._p01 = ctypes.c_float(0.0)
         self._p10 = ctypes.c_float(0.0)
-        self._p11 = ctypes.c_float(p0)
+        self._p11 = ctypes.c_float(0.0)
         self._integral = ctypes.c_float(0.0)
         self._delta = ctypes.c_float(0.0)
         self._saturated = ctypes.c_int(0)
+        self._lib.tvc_controller_init(
+            ctypes.byref(self._x_hat), ctypes.byref(self._bias_hat),
+            ctypes.byref(self._p00), ctypes.byref(self._p01),
+            ctypes.byref(self._p10), ctypes.byref(self._p11),
+            ctypes.byref(self._integral), ctypes.byref(self._delta),
+            ctypes.byref(self._saturated),
+            ctypes.c_float(p0_angle), ctypes.c_float(p0_bias),
+        )
 
     def step(self, gyro_deg_s, accel_tilt_deg, accel_gate_ok):
         """Advance this axis by one control tick. Returns a dict matching AxisOut:

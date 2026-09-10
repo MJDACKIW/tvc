@@ -202,14 +202,30 @@ sim must use the identical gate, on $|a|$ against `kalman.accel_gate_g`
 sim: during most of a burn, axial specific force is well above 1 g (Estes E12-4 averages
 roughly 1.5 g across the sustained-thrust plateau), so the gate is expected to reject the
 accelerometer for most of powered flight and pass it mainly near ignition and burnout, unlike
-`paper/tvc_paper_figures.py`'s simplified `t <= burn_time` gate. This has a real downstream
-consequence, confirmed by `run_sim.py all`: with $\hat x$ seeded at 0, the brief gate-open
-window near ignition has to correct the whole initial tip-off angle at once, and the coupled
-angle/bias update can attribute part of that one-time correction to $\hat b$ rather than angle.
-That bias then contaminates gyro-only dead reckoning for the rest of the burn (the gate stays
-closed), producing true-angle drift on the order of a degree even with no sensor noise. This is
-a state-estimator artifact of the paper's zero-initialized filter meeting a realistic gate, not
-a `core/` bug; see `sim/run_sim.py`'s `cmd_report()` output for the full account.
+`paper/tvc_paper_figures.py`'s simplified `t <= burn_time` gate.
+
+**Initial covariance is asymmetric, not a shared scalar.** $P_0 =
+\operatorname{diag}(p_{0,\theta},\, p_{0,b})$, seeded by `controller_init(state, p0_angle,
+p0_bias)` (3.4): the ONE place both the sim and firmware set it, so the convention can't
+drift apart between callers the way `sim/tvc_core.py` setting these fields inline once did.
+`kalman.p0_angle`/`p0_bias` (Section 2) are real design values, not `MEASURE`: `p0_angle`
+should be large (an initial tip-off angle is genuinely unknown; a plausible bound is
+`staging.prelaunch_tilt_abort_deg` treated as a ~2-sigma limit) and `p0_bias` small (a
+calibrated gyro's residual bias after a stationary pre-launch average is well characterized).
+A single shared `p0` here previously gave the angle and bias states equal initial
+uncertainty, with a real downstream consequence (confirmed by `run_sim.py
+diagnose_estimator`): with $\hat x$ seeded at 0, the brief accelerometer-gate-open window
+near ignition has to correct the whole initial tip-off angle at once, and the coupled
+angle/bias update had no reason to prefer attributing that correction to angle over bias,
+so a real share of it went to $\hat b$ instead. That wrong bias then contaminated gyro-only
+dead reckoning for the rest of the burn (the gate stays closed), producing true-angle drift
+of several degrees under sensor noise -- a state-estimator artifact of the paper's
+zero-initialized filter meeting a realistic gate, not a `core/` bug. Giving the bias state
+much lower initial uncertainty removes this specific mechanism (verified: `diagnose_estimator`'s
+gate misattribution component drops from ~2.4 deg to ~0 deg of the baseline's steady-state
+drift); a smaller residual (~0.5 deg) remains from gyro white noise integrated over the long
+predict-only stretch, which is intrinsic to gyro-only dead reckoning and not fixable by
+initialization. See `sim/run_sim.py`'s `diagnose_estimator` output for the full account.
 
 ### 3.2 PID (paper §3.1 eq5, Appendix A.3)
 
@@ -248,9 +264,14 @@ struct AxisState { float x_hat, bias_hat, p00, p01, p10, p11, integral, delta; b
 struct AxisOut   { float x_hat, u_raw, u_cmd, delta, K; bool accel_used; };
 struct ControlParams { float dt, kp, ki, kd, integral_clamp, max_deflection, q_angle, q_rate, r, slew_deg_per_s, tau_s; };
 AxisOut controller_step(AxisState&, float gyro_deg_s, float accel_tilt_deg, bool accel_gate_ok, const ControlParams&);
+void controller_init(AxisState&, float p0_angle, float p0_bias);
 ```
 `K` in `AxisOut` is $k_0$, the angle-measurement gain from 3.1 (0 whenever `accel_used` is
-false). `ffi.cpp` exposes `tvc_controller_step(...)` with plain floats for ctypes.
+false). `controller_init` resets an `AxisState` to `x_hat = bias_hat = 0`,
+`P0 = diag(p0_angle, p0_bias)`, `integral = delta = 0`, `saturated = false`: call it once
+before the first `controller_step` on a fresh axis (see 3.1 for why `p0_angle`/`p0_bias`
+must differ). `ffi.cpp` exposes `tvc_controller_step(...)` and `tvc_controller_init(...)`
+with plain floats for ctypes.
 
 ### 3.5 Corrective torque and disturbance (used by sim and by `iae_compare.py`)
 $$\tau_{ctrl} = F_T(t)\, r\, \sin\delta, \qquad

@@ -42,4 +42,17 @@ struct ControlParams {
 AxisOut controller_step(AxisState& state, float gyro_deg_s, float accel_tilt_deg,
                          bool accel_gate_ok, const ControlParams& params);
 
+// Resets state to a well-defined initial condition: x_hat = bias_hat = 0, P0 =
+// diag(p0_angle, p0_bias) (off-diagonal 0), integral = delta = 0, saturated = false.
+// The ONE place this convention is defined, so firmware and the sim can't drift apart
+// on it the way sim/tvc_core.py's ControllerAxis used to set these fields directly
+// itself. p0_angle and p0_bias are deliberately asymmetric in flight use (see
+// params.yaml's kalman.p0_angle/p0_bias comments): the angle state starts genuinely
+// uncertain (an unknown tip-off angle), the bias state starts already well-characterized
+// (a calibrated gyro), and a shared, equal P0 for both let the filter's very first
+// accelerometer correction misattribute part of a large initial-angle error to bias_hat,
+// which was never revisited once the accelerometer gate closed (see
+// run_sim.py's diagnose_estimator).
+void controller_init(AxisState& state, float p0_angle, float p0_bias);
+
 }  // namespace tvc
