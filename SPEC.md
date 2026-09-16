@@ -301,6 +301,16 @@ SD              built-in SDIO
 Final: `PYRO_CONT_PIN = A14 (pin 38)`. AS5600 has a fixed address, hence one per I²C bus. Flag
 in the README that the RFM95 RST wire moves from 24 to 9 and that HX711 moves to 6/7.
 
+**Load cell wiring.** Four half-bridge load cells, one at each stand foot, wired in a loop for
+excitation (white-white, black-black), with the two diagonal pairs' red (signal) leads going
+to the HX711's two differential inputs (`E+/E-` and `A+/A-`). This sums all four cells into
+one logical channel on `HX_DOUT_PIN`/`HX_SCK_PIN` (6/7): the firmware never sees four
+channels, only one combined thrust reading. Mechanically: the fixed end of each cell is bolted
+to the stand's base plate; the free end takes load through a point contact (a printed
+bracket's pip) rather than a rigid bolt, so the cell sees pure axial load without a bending
+moment from misalignment; loose guide pins at each foot prevent the stand from tipping without
+constraining the cells themselves.
+
 ### 4.6 Redundant logging (three independent copies)
 1. **SD primary**: pre-allocated 64 MB binary file, `Record` struct (below) at 300 Hz,
    written from a 12 s RAM ring buffer with `SdFat` and 512-byte aligned blocks. The file is
@@ -313,7 +323,9 @@ in the README that the RFM95 RST wire moves from 24 to 9 and that HX711 moves to
    written as both raw `.bin` and `.csv`, plus the GUI event log. Independent of the vehicle.
 Plus the EEPROM summary (state at exit, fault bits, peak thrust, peak |θ|, IAE) after every run.
 
-`Record` (packed, 64 bytes): `uint32 t_us; uint8 state; uint8 mode; uint16 fault_bits;
+`Record` (packed, 74 bytes; an earlier draft of this line said 64, but the field list below was
+always the authoritative definition and was never trimmed to fit that count, so 74 is correct
+and 64 was simply never updated): `uint32 t_us; uint8 state; uint8 mode; uint16 fault_bits;
 float thrust_N; int16 gyro[3]; int16 accel[3]; float xhat_p, xhat_y; float u_p, u_y;
 float delta_p, delta_y; float enc_p, enc_y; float K_p, K_y; uint16 servo_us_p, servo_us_y;
 uint8 pyro; uint8 cont_adc8; uint16 loop_us; uint16 crc16;`

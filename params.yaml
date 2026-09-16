@@ -28,6 +28,8 @@ vehicle:
   l_cop_minus_com_m: 0.080          # paper §2.6: CoP ≈ 80 mm ahead of CoM (positive = destabilising)
   diameter_m: 0.0762
   cn_alpha_per_rad: MEASURE         # Barrowman, from OpenRocket
+loadcell:
+  hx_scale_counts_per_n: MEASURE   # raw HX711 counts per Newton; hang a known mass, use TARE then compute
 motor:
   name: "Estes E12-4"
   thrust_curve_file: "sim/data/estes_e12.eng"
