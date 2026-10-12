@@ -53,6 +53,9 @@ subprocess.run([generator_python, str(repo_root / "tools" / "gen_params.py")],
                check=True, cwd=repo_root)
 subprocess.run([generator_python, str(repo_root / "tools" / "gen_protocol.py")],
                check=True, cwd=repo_root)
+# test_parity includes this header; it is gitignored and written per machine (SPEC.md 6.1).
+subprocess.run([generator_python, str(repo_root / "tools" / "parity_test.py"), "--fixture-only"],
+               check=True, cwd=repo_root)
 
 try:
     git_hash = subprocess.run(
