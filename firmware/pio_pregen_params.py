@@ -6,15 +6,53 @@ short hash into src/flight/git_hash.h for the SD log header (SPEC 4.6).
 SCons exec's extra_scripts as source text rather than importing them as a module, so
 `__file__` is not defined here; "#" is SCons's own name for the project root (where
 platformio.ini lives), one level below the repo root.
+
+The generators need PyYAML, which neither the system python3 nor PlatformIO's own Python has.
+They run under the first interpreter below that can `import yaml`: $TVC_PYTHON, then the
+project venv at ground/venv (never a dot-folder: this repo is iCloud-synced and dot-folders get
+the macOS hidden flag), then PlatformIO's own Python, then the system python3.
 """
 Import("env")
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 repo_root = Path(env.Dir("#").abspath).parent
-subprocess.run(["python3", str(repo_root / "tools" / "gen_params.py")], check=True, cwd=repo_root)
-subprocess.run(["python3", str(repo_root / "tools" / "gen_protocol.py")], check=True, cwd=repo_root)
+
+
+def _has_yaml(python):
+    try:
+        return subprocess.run([python, "-c", "import yaml"], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+def _generator_python():
+    candidates = []
+    if os.environ.get("TVC_PYTHON"):
+        candidates.append(os.environ["TVC_PYTHON"])
+    candidates.append(str(repo_root / "ground" / "venv" / "bin" / "python"))
+    candidates.append(sys.executable)
+    candidates.append("python3")
+    for candidate in candidates:
+        if _has_yaml(candidate):
+            return candidate
+    print(
+        "tvc: no Python with PyYAML found, so params.h cannot be generated.\n"
+        "     Create the project venv (once):\n"
+        "       python3 -m venv ground/venv && ground/venv/bin/python -m pip install "
+        "-r ground/requirements.txt"
+    )
+    env.Exit(1)
+
+
+generator_python = _generator_python()
+subprocess.run([generator_python, str(repo_root / "tools" / "gen_params.py")],
+               check=True, cwd=repo_root)
+subprocess.run([generator_python, str(repo_root / "tools" / "gen_protocol.py")],
+               check=True, cwd=repo_root)
 
 try:
     git_hash = subprocess.run(
