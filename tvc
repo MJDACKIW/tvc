@@ -1155,7 +1155,7 @@ def cmd_ready(args) -> int:
     others = sorted(n for n, m in values.items() if m and n not in required)
     if blocking:
         gate("RED", "MEASURE values still blocking ARM: " + ", ".join(blocking),
-             "measure them (BRINGUP.md section 'MEASURE values'), put them in params.yaml, "
+             "measure them (BRINGUP.md section 'MEASURE'), put them in params.yaml, "
              "then ./tvc flash teensy")
     else:
         gate("GREEN", "no MEASURE value blocks ARM in STAND_OPEN")

@@ -5,12 +5,26 @@ Read it in full before doing anything in this repo. It covers the repo layout, `
 the exact control equations, firmware modes, ground station, simulation, and the phased
 build plan. This file is just pointers.
 
-## Build and test (Phase 1: core/ only, no hardware)
+## Bring-up (`./tvc`, see BRINGUP.md for the order)
 
 ```
-python3 tools/gen_params.py                 # params.yaml -> core/params.h, sim/tvc_params.py
+./tvc test            # native tests, parity, codec, GUI offscreen
+./tvc ports           # find the Teensy and the Feather
+./tvc flash all       # build + upload both, then verify what each reports
+./tvc selftest        # SELFTEST over USB, one PASS/FAIL line per check
+./tvc link            # 60 s radio test through the Feather
+./tvc ready           # pre-fire checklist, GREEN / RED / MANUAL
+```
+
+`./tvc` re-runs itself under `ground/venv`. Bare `python3` and PlatformIO's own Python have no
+PyYAML; the pio pre-build step finds `ground/venv` by itself (override with `TVC_PYTHON`).
+
+## Build and test by hand (core/ only, no hardware)
+
+```
+ground/venv/bin/python tools/gen_params.py  # params.yaml -> core/params.h, sim/tvc_params.py
 ~/.platformio/penv/bin/pio test -e native   # runs firmware/test/ against core/
-python3 tools/parity_test.py                # core/ via ctypes vs. core/ via pio native test
+ground/venv/bin/python tools/parity_test.py # core/ via ctypes vs. core/ via pio native test
 ```
 
 `pio` lives at `~/.platformio/penv/bin/pio`; use the full path (SPEC.md Section 10: an
