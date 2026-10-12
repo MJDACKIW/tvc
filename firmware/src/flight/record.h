@@ -68,6 +68,7 @@ constexpr uint16_t kArmSwitch = 1u << 9;
 constexpr uint16_t kContinuity = 1u << 10;
 constexpr uint16_t kNoIgnition = 1u << 11;
 constexpr uint16_t kHx711 = 1u << 12;
+constexpr uint16_t kRadio = 1u << 13;
 }  // namespace fault_bits
 
 // SPEC.md Section 4.6. Field list as specified there sums to 74 bytes, not the "64 bytes"

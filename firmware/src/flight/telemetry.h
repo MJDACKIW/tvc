@@ -11,7 +11,9 @@
 // list, the same way sequencer.cpp's buildAndLogRecord() already gathers Record's fields.
 namespace tvc::flight::telemetry {
 
-void init();  // radio::begin() + resets the STATUS cumulative accumulators (since boot)
+// radio::begin() + resets the STATUS cumulative accumulators (since boot). Returns radio::begin()'s
+// result so SELFTEST can report it.
+bool init();
 
 // Call every control-rate (150 Hz) sub-step (SPEC 4.2), right where the shadow controller
 // produces this tick's output for each axis. Updates running IAE, peak tilt, and saturation-%

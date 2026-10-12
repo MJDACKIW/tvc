@@ -94,6 +94,7 @@ FAULT_BITS = [
     (1 << 10, "CONTINUITY"),
     (1 << 11, "NO_IGNITION"),
     (1 << 12, "HX711"),
+    (1 << 13, "RADIO"),
 ]
 
 # protocol.h telem_flags.

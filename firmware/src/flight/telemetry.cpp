@@ -155,8 +155,8 @@ void sendStatus() {
 
 }  // namespace
 
-void init() {
-    radio::begin();
+bool init() {
+    const bool radio_ok = radio::begin();
     g_xhat_p = g_xhat_y = g_u_p = g_u_y = 0;
     g_k_p_x1000 = g_k_y_x1000 = 0;
     g_gate_sat_flags = 0;
@@ -165,6 +165,7 @@ void init() {
     g_control_ticks = g_sat_ticks_p = g_sat_ticks_y = 0;
     g_next_telem_ms = g_next_status_ms = millis();
     for (auto& p : g_pending) p.live = false;
+    return radio_ok;
 }
 
 void onControlTick(const estimator::ShadowOut& pitch, const estimator::ShadowOut& yaw) {

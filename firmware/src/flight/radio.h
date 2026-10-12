@@ -10,7 +10,10 @@
 // use.
 namespace tvc::flight::radio {
 
-void begin();  // RST pulse + rf95.init() + frequency/SF/BW/CR/power from params::telemetry::*
+// RST pulse + rf95.init() + frequency/SF/BW/CR/power from params::telemetry::*. Returns false
+// if the RFM95W did not answer on SPI; send() and pollUplink() then do nothing, so a missing
+// radio cannot hang the flight loop.
+bool begin();
 
 // Wraps payload in the shared frame (sync/len/type/crc16, protocol.h) and transmits over LoRa.
 // Blocks until the send completes (RadioHead's own waitPacketSent()); payload_len must be <=

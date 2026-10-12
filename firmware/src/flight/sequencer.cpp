@@ -7,6 +7,7 @@
 #include "encoders.h"
 #include "estimator.h"
 #include "event_codes.h"
+#include "git_hash.h"
 #include "imu.h"
 #include "loadcell.h"
 #include "logging_flash.h"
@@ -39,6 +40,7 @@ constexpr Mode kFixedMode = Mode::kStandOpen;  // this build implements STAND_OP
 Profile g_profile = Profile::kHold;
 bool g_dry_run = false;
 uint16_t g_fault_bits = 0;
+bool g_radio_ok = false;  // telemetry::init() result from begin(); reported by SELFTEST
 
 uint32_t g_t_state_ms = 0;
 uint32_t g_t_ignite_us = 0;
@@ -242,6 +244,16 @@ void runSelftest() {
         Serial.println(F("[PASS] LittleFS flash mirror mounted"));
     }
 
+    // SPEC.md 4.3 lists "radio init" in SELFTEST. Init runs once, in begin(): a re-run of
+    // SELFTEST reports that boot-time result, so fix the wiring and power-cycle.
+    if (!g_radio_ok) {
+        g_fault_bits |= fault_bits::kRadio;
+        hard_fault = true;
+        Serial.println(F("[FAIL] radio init (RFM95W did not answer on SPI; power-cycle after fixing)"));
+    } else {
+        Serial.println(F("[PASS] radio init (RFM95W answers on SPI)"));
+    }
+
     if (!loadcell::tare()) {
         g_fault_bits |= fault_bits::kHx711;
         hard_fault = true;
@@ -334,7 +346,7 @@ void begin() {
     encoders::begin();
     servo_drive::begin();
     estimator::init();
-    telemetry::init();
+    g_radio_ok = telemetry::init();
     sendEvent(protocol::EventCode::kBOOT, 0);
 
     Serial.printf("mode jumpers read %d%d -- mode is fixed to STAND_OPEN this build\n",
@@ -590,11 +602,11 @@ estimator::ShadowOut shadowYaw() { return g_shadow_y; }
 void printStatus() {
     Serial.printf(
         "[%s] mode=STAND_OPEN profile=%s dry_run=%d thrust=%.2fN enc=(%.2f,%.2f)deg "
-        "arm_sw=%s cont=%s fault_bits=0x%04X overruns=%lu\n",
+        "arm_sw=%s cont=%s fault_bits=0x%04X overruns=%lu fw=%s\n",
         stateName(g_state), profileName(g_profile), g_dry_run, loadcell::thrustN(),
         encoders::pitchDeg(), encoders::yawDeg(), armSwitchClosed() ? "CLOSED" : "open",
         continuityOk() ? "OK" : "OPEN", g_fault_bits,
-        static_cast<unsigned long>(g_loop_overrun_count));
+        static_cast<unsigned long>(g_loop_overrun_count), kFirmwareGitHash);
 }
 
 }  // namespace tvc::flight::sequencer

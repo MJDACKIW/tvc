@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "git_hash.h"
 #include "logging_flash.h"
 #include "sequencer.h"
 
@@ -101,7 +102,7 @@ void begin() {
     Serial.begin(115200);
     uint32_t t0 = millis();
     while (!Serial && millis() - t0 < 3000) {}
-    Serial.println(F("TVC STAND_OPEN firmware ready."));
+    Serial.printf("TVC STAND_OPEN firmware ready. fw=%s\n", kFirmwareGitHash);
     printHelp();
 }
 
