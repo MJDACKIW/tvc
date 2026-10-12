@@ -22,6 +22,14 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "protocol"))
+
+# State/mode/profile names, fault bits, and the CRC are shared with the telemetry side
+# (protocol/telem_codec.py) rather than kept as a second hand-synced copy here.
+from telem_codec import FAULT_BITS, crc16_ccitt_false  # noqa: E402
+from telem_codec import MODE_NAMES as MODE_NAME  # noqa: E402
+from telem_codec import PROFILE_NAMES as PROFILE_NAME  # noqa: E402
+from telem_codec import STATE_NAMES as STATE_NAME  # noqa: E402
 
 # '<' little endian, no padding -- matches firmware/src/flight/logging_sd.cpp's #pragma pack(1)
 HEADER_FMT = "<II65s20sBB2sII"
@@ -40,54 +48,8 @@ assert RECORD_SIZE == 74, f"RECORD_FMT computes to {RECORD_SIZE} bytes, expected
     "(SPEC.md 4.6's own prose says 64; the field list there sums to 74 -- see the session " \
     "notes. This script follows the field list, i.e. firmware/src/flight/record.h.)"
 
-STATE_NAME = ["BOOT", "SELFTEST", "IDLE", "ARMED", "COUNTDOWN", "IGNITE", "BURN",
-              "TAILOFF", "SAFE", "FAULT"]
-MODE_NAME = ["SIM_ONBOARD", "HIL", "STAND_OPEN", "STAND_CLOSED", "FLIGHT"]
-PROFILE_NAME = ["HOLD", "STEP_X", "STEP_Y", "RAMP_X", "CHIRP_X"]
-
-# Must match firmware/src/flight/record.h's fault_bits namespace bit-for-bit.
-FAULT_BITS = [
-    (1 << 0, "MEASURE_MISSING"),
-    (1 << 1, "FRAME_DET_INVALID"),
-    (1 << 2, "IMU"),
-    (1 << 3, "SD"),
-    (1 << 4, "FLASH"),
-    (1 << 5, "ENCODER"),
-    (1 << 6, "SERVO_SELFTEST"),
-    (1 << 7, "LOOP_OVERRUN"),
-    (1 << 8, "SERVO_RATE"),
-    (1 << 9, "ARM_SWITCH"),
-    (1 << 10, "CONTINUITY"),
-    (1 << 11, "NO_IGNITION"),
-    (1 << 12, "HX711"),
-]
-
 GYRO_LSB_PER_DPS = 16.4     # +/-2000 dps, matches firmware/src/flight/imu.cpp
 ACCEL_LSB_PER_G = 2048.0    # +/-16 g
-
-_CRC16_TABLE = None
-
-
-def _crc16_table():
-    global _CRC16_TABLE
-    if _CRC16_TABLE is None:
-        table = []
-        for byte in range(256):
-            crc = byte << 8
-            for _ in range(8):
-                crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
-            table.append(crc)
-        _CRC16_TABLE = table
-    return _CRC16_TABLE
-
-
-def crc16_ccitt_false(data: bytes) -> int:
-    """Matches firmware/src/flight/record.h's crc16(): CRC-16/CCITT-FALSE, init 0xFFFF."""
-    table = _crc16_table()
-    crc = 0xFFFF
-    for b in data:
-        crc = ((crc << 8) & 0xFFFF) ^ table[((crc >> 8) ^ b) & 0xFF]
-    return crc
 
 
 def current_params_hash():
@@ -103,17 +65,24 @@ def current_params_hash():
     return None
 
 
+class LogFormatError(ValueError):
+    pass
+
+
 def load_header(raw: bytes):
     if len(raw) < HEADER_SIZE:
-        sys.exit(f"file is only {len(raw)} bytes, shorter than the {HEADER_SIZE}-byte header")
+        raise LogFormatError(f"file is only {len(raw)} bytes, shorter than the "
+                             f"{HEADER_SIZE}-byte header")
     magic, schema, params_hash, git_hash, mode, profile, _pad, boot_count, record_size = \
         struct.unpack_from(HEADER_FMT, raw, 0)
     if magic != HEADER_MAGIC:
-        sys.exit(f"header magic 0x{magic:08X} != expected 0x{HEADER_MAGIC:08X} -- this is not "
-                 "a teensy_flight SD log (wrong file, or the header layout has drifted)")
+        raise LogFormatError(f"header magic 0x{magic:08X} != expected 0x{HEADER_MAGIC:08X} -- "
+                             "this is not a teensy_flight SD log (wrong file, or the header "
+                             "layout has drifted)")
     if record_size != RECORD_SIZE:
-        sys.exit(f"header says sizeof(Record) = {record_size}, this script expects "
-                 f"{RECORD_SIZE} -- RECORD_FMT here and firmware/src/flight/record.h disagree")
+        raise LogFormatError(f"header says sizeof(Record) = {record_size}, this script "
+                             f"expects {RECORD_SIZE} -- RECORD_FMT here and "
+                             "firmware/src/flight/record.h disagree")
     return {
         "schema": schema,
         "params_hash": params_hash.split(b"\0", 1)[0].decode("ascii", "replace"),
@@ -131,7 +100,7 @@ def load_records(raw: bytes):
         print(f"WARNING: {len(body)} bytes of record data is not a multiple of "
               f"{RECORD_SIZE}; {rem} trailing bytes ignored (likely a partial last flush).")
     if n == 0:
-        sys.exit("No complete records found after the header.")
+        raise LogFormatError("No complete records found after the header.")
 
     recs = np.zeros(n, dtype=[
         ("t_us", "u4"), ("state", "u1"), ("mode", "u1"), ("fault_bits", "u2"),
@@ -143,7 +112,7 @@ def load_records(raw: bytes):
         ("pyro", "u1"), ("cont_adc8", "u1"), ("loop_us", "u2"), ("crc16", "u2"),
     ])
     unpack = struct.Struct(RECORD_FMT).unpack_from
-    crc_fail = 0
+    crc_ok = np.ones(n, dtype=bool)
     for i in range(n):
         off = i * RECORD_SIZE
         vals = unpack(body, off)
@@ -151,8 +120,8 @@ def load_records(raw: bytes):
         stored_crc = vals[-1]
         computed = crc16_ccitt_false(body[off:off + RECORD_SIZE - 2])
         if computed != stored_crc:
-            crc_fail += 1
-    return recs, crc_fail
+            crc_ok[i] = False
+    return recs, int(np.count_nonzero(~crc_ok)), crc_ok
 
 
 def summarize(header, r, crc_fail):
@@ -310,8 +279,11 @@ def main():
     args = ap.parse_args()
 
     raw = Path(args.path).read_bytes()
-    header = load_header(raw)
-    r, crc_fail = load_records(raw)
+    try:
+        header = load_header(raw)
+        r, crc_fail, _crc_ok = load_records(raw)
+    except LogFormatError as exc:
+        sys.exit(str(exc))
     t = summarize(header, r, crc_fail)
 
     if args.csv:

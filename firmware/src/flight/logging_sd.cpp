@@ -25,6 +25,7 @@ SdFs g_sd;
 FsFile g_file;
 char g_filename[32] = {0};
 uint32_t g_bytes_written = 0;
+uint32_t g_boot_count = 0;
 bool g_open = false;
 
 #pragma pack(push, 1)
@@ -89,7 +90,8 @@ bool begin(Mode mode, Profile profile) {
     strncpy(h.git_hash, kFirmwareGitHash, sizeof(h.git_hash) - 1);
     h.mode = static_cast<uint8_t>(mode);
     h.profile = static_cast<uint8_t>(profile);
-    h.boot_count = nextBootCount();
+    g_boot_count = nextBootCount();
+    h.boot_count = g_boot_count;
     h.record_size = sizeof(Record);
     g_file.write(reinterpret_cast<const uint8_t*>(&h), sizeof(h));
     g_bytes_written = sizeof(h);
@@ -124,6 +126,7 @@ void close() {
 }
 
 uint32_t bytesWritten() { return g_bytes_written; }
+uint32_t bootCount() { return g_boot_count; }
 const char* filename() { return g_filename; }
 
 }  // namespace tvc::flight::logging_sd

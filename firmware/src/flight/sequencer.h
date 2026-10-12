@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "estimator.h"
 #include "record.h"
 
 // The test-stand/flight sequencer (SPEC.md Section 4.3) plus its safety interlocks
@@ -46,7 +47,21 @@ State state();
 Mode mode();
 Profile profile();
 bool dryRun();
+bool armSwitchClosed();  // ARM_SENSE_PIN reads closed (input pullup, switch to GND)
 uint16_t faultBits();
+uint32_t loopOverrunCount();
+
+// ms since ignition, negative pre-launch (SPEC.md Section 4.7's TELEM/EVENT t_ms): counts down
+// to 0 during COUNTDOWN (the scheduled ignition instant), counts up from 0 from IGNITE onward,
+// and is a fixed "nothing scheduled yet" sentinel before COUNTDOWN starts. Used by telemetry.cpp.
+int32_t telemetryTMs();
+
+// Last control-tick output for each axis (telemetry.cpp's onControlTick() call site already has
+// these fresh every 150 Hz sub-step; these getters exist for anything else that wants the same
+// values without sequencer.cpp threading them through as parameters).
+estimator::ShadowOut shadowPitch();
+estimator::ShadowOut shadowYaw();
+
 void printStatus();
 
 }  // namespace tvc::flight::sequencer

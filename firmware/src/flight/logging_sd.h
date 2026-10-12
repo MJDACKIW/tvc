@@ -24,6 +24,7 @@ void flushAll();  // writes any partial chunk still sitting in the ring
 void close();      // flushAll(), truncate to actual length, close the file
 
 uint32_t bytesWritten();
+uint32_t bootCount();  // the value written into this run's log header (SPEC 4.7 STATUS.boot_count)
 const char* filename();
 
 }  // namespace tvc::flight::logging_sd

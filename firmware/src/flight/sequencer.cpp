@@ -2,9 +2,11 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <string.h>
 
 #include "encoders.h"
 #include "estimator.h"
+#include "event_codes.h"
 #include "imu.h"
 #include "loadcell.h"
 #include "logging_flash.h"
@@ -13,6 +15,7 @@
 #include "pins.h"
 #include "profiles.h"
 #include "servo_drive.h"
+#include "telemetry.h"
 
 namespace tvc::flight::sequencer {
 namespace {
@@ -65,8 +68,6 @@ estimator::ShadowOut g_shadow_p{}, g_shadow_y{};        // last shadow controlle
 IntervalTimer g_pyro_off_timer;
 
 // ---- small helpers --------------------------------------------------------------------
-bool armSwitchClosed() { return digitalReadFast(pins::kArmSense) == LOW; }
-
 int continuityRaw12() { return analogRead(pins::kPyroCont); }
 
 bool continuityOk() {
@@ -94,10 +95,33 @@ void setLeds() {
     digitalWriteFast(pins::kLedTvcActive, g_state == State::kBurn ? HIGH : LOW);
 }
 
+void sendEvent(protocol::EventCode code, int16_t aux) {
+    telemetry::onEvent(static_cast<uint8_t>(code), aux);
+}
+
+// record.h's State and protocol/event_codes.yaml's STATE_* codes are two independently
+// maintained lists (event codes cover more than just states -- COUNTDOWN_TICK, TARE_OK, ...);
+// this is the one place that maps one to the other.
+protocol::EventCode stateEventCode(State s) {
+    switch (s) {
+        case State::kBoot: return protocol::EventCode::kBOOT;
+        case State::kSelftest: return protocol::EventCode::kBOOT;  // SELFTEST_PASS/FAIL cover this
+        case State::kIdle: return protocol::EventCode::kSTATE_IDLE;
+        case State::kArmed: return protocol::EventCode::kSTATE_ARMED;
+        case State::kCountdown: return protocol::EventCode::kSTATE_COUNTDOWN;
+        case State::kIgnite: return protocol::EventCode::kSTATE_IGNITE;
+        case State::kBurn: return protocol::EventCode::kSTATE_BURN;
+        case State::kTailoff: return protocol::EventCode::kSTATE_TAILOFF;
+        case State::kSafe: return protocol::EventCode::kSTATE_SAFE;
+        default: return protocol::EventCode::kSTATE_FAULT;
+    }
+}
+
 void enter(State s) {
     g_state = s;
     g_t_state_ms = millis();
     Serial.printf(">> %s\n", stateName(s));
+    if (s != State::kSelftest) sendEvent(stateEventCode(s), 0);
 }
 
 // STAND_OPEN's own required-MEASURE set: only what this mode actually needs to operate
@@ -155,6 +179,15 @@ void buildAndLogRecord(uint32_t loop_us) {
     logging_flash::push(r);
 }
 
+protocol::EventCode abortEventCode(const char* why) {
+    if (strcmp(why, "arm switch opened") == 0) return protocol::EventCode::kABORT_ARM_SWITCH_OPENED;
+    if (strcmp(why, "pre-launch tilt exceeded") == 0) return protocol::EventCode::kABORT_PRELAUNCH_TILT;
+    if (strcmp(why, "no FIRE_CONFIRM within window") == 0) return protocol::EventCode::kABORT_NO_FIRE_CONFIRM;
+    if (strcmp(why, "igniter continuity lost") == 0) return protocol::EventCode::kABORT_CONTINUITY_LOST;
+    if (strstr(why, "no thrust detected") != nullptr) return protocol::EventCode::kABORT_NO_IGNITION;
+    return protocol::EventCode::kABORT_MANUAL;  // console ABORT or anything not listed above
+}
+
 void abortInternal(const char* why) {
     pyroOff();
     g_pyro_off_timer.end();
@@ -162,6 +195,7 @@ void abortInternal(const char* why) {
     servo_drive::center();
     noTone(pins::kBuzzer);
     Serial.printf("!! ABORT: %s\n", why);
+    sendEvent(abortEventCode(why), 0);
     enter(State::kSafe);
 }
 
@@ -271,11 +305,13 @@ void runSelftest() {
 
     if (hard_fault) {
         Serial.println(F("--- SELFTEST: FAULT (see failures above) ---"));
+        sendEvent(protocol::EventCode::kSELFTEST_FAIL, static_cast<int16_t>(g_fault_bits));
         enter(State::kFault);
         return;
     }
 
     Serial.println(F("--- SELFTEST: complete ---"));
+    sendEvent(protocol::EventCode::kSELFTEST_PASS, static_cast<int16_t>(g_fault_bits));
     enter(State::kIdle);
 }
 
@@ -298,6 +334,8 @@ void begin() {
     encoders::begin();
     servo_drive::begin();
     estimator::init();
+    telemetry::init();
+    sendEvent(protocol::EventCode::kBOOT, 0);
 
     Serial.printf("mode jumpers read %d%d -- mode is fixed to STAND_OPEN this build\n",
                   digitalRead(pins::kModeJumperA), digitalRead(pins::kModeJumperB));
@@ -341,6 +379,8 @@ void tick(uint32_t loop_us) {
                     last_beep = now;
                     tone(pins::kBuzzer, rem_s < 3 ? 2200 : 1400, 80);
                     Serial.printf("T-%lu\n", static_cast<unsigned long>(rem_s) + 1);
+                    sendEvent(protocol::EventCode::kCOUNTDOWN_TICK,
+                              static_cast<int16_t>(rem_s + 1));
                 }
                 break;
             }
@@ -434,6 +474,7 @@ void tick(uint32_t loop_us) {
 
         g_shadow_p = estimator::stepPitch(imu::gyroDegS(0), imu::pitchTiltDeg(), imu::accelGateOk());
         g_shadow_y = estimator::stepYaw(imu::gyroDegS(1), imu::yawTiltDeg(), imu::accelGateOk());
+        telemetry::onControlTick(g_shadow_p, g_shadow_y);
 
         float target_p = 0.0f, target_y = 0.0f;
         if (g_state == State::kBurn) profiles::targetAngles(g_profile, (micros() - g_t_ignite_us) * 1e-6f, target_p, target_y);
@@ -449,6 +490,7 @@ void tick(uint32_t loop_us) {
     }
 
     buildAndLogRecord(loop_us);
+    telemetry::onLoopTick();
 }
 
 // ---- console-invoked commands --------------------------------------------------------
@@ -487,6 +529,7 @@ void cmdFireConfirm(uint16_t token) {
     if (token != g_fire_token) { Serial.println(F("FIRE_CONFIRM: token mismatch")); return; }
     g_fire_confirmed = true;
     Serial.println(F("fire token confirmed"));
+    sendEvent(protocol::EventCode::kFIRE_CONFIRMED, 0);
 }
 
 void cmdAbort(const char* why) { abortInternal(why); }
@@ -496,12 +539,14 @@ void cmdSetProfile(uint8_t index) {
     if (index >= static_cast<uint8_t>(Profile::kCount)) { Serial.println(F("PROFILE index out of range")); return; }
     g_profile = static_cast<Profile>(index);
     Serial.printf("profile = %s\n", profileName(g_profile));
+    sendEvent(protocol::EventCode::kPROFILE_SET, index);
 }
 
 void cmdSetDryRun(bool on) {
     if (g_state != State::kIdle) { Serial.println(F("DRY_RUN only from IDLE")); return; }
     g_dry_run = on;
     Serial.printf("dry_run = %s\n", on ? "ON (igniter output must be an LED, not a real igniter)" : "off");
+    sendEvent(on ? protocol::EventCode::kDRY_RUN_ON : protocol::EventCode::kDRY_RUN_OFF, 0);
 }
 
 void cmdTare() {
@@ -509,6 +554,7 @@ void cmdTare() {
     bool ok = loadcell::tare();
     encoders::zero();
     Serial.printf("tare: load cell %s, encoders zeroed\n", ok ? "ok" : "FAILED (check HX711 wiring)");
+    sendEvent(ok ? protocol::EventCode::kTARE_OK : protocol::EventCode::kTARE_FAILED, 0);
 }
 
 void cmdResetToIdle() {
@@ -520,7 +566,26 @@ State state() { return g_state; }
 Mode mode() { return kFixedMode; }
 Profile profile() { return g_profile; }
 bool dryRun() { return g_dry_run; }
+bool armSwitchClosed() { return digitalReadFast(pins::kArmSense) == LOW; }
 uint16_t faultBits() { return g_fault_bits; }
+uint32_t loopOverrunCount() { return g_loop_overrun_count; }
+
+int32_t telemetryTMs() {
+    if (g_state == State::kCountdown) {
+        int32_t remaining_ms = static_cast<int32_t>(kCountdownMs) -
+                                static_cast<int32_t>(millis() - g_countdown_start_ms);
+        return -remaining_ms;  // still negative; hits 0 at the scheduled ignition instant
+    }
+    bool ignited_this_boot = g_t_ignite_us != 0;
+    if (g_state == State::kIgnite || g_state == State::kBurn || g_state == State::kTailoff ||
+        ((g_state == State::kSafe || g_state == State::kFault) && ignited_this_boot)) {
+        return static_cast<int32_t>((micros() - g_t_ignite_us) / 1000);
+    }
+    return -32768;  // BOOT/SELFTEST/IDLE/ARMED: no ignition scheduled yet
+}
+
+estimator::ShadowOut shadowPitch() { return g_shadow_p; }
+estimator::ShadowOut shadowYaw() { return g_shadow_y; }
 
 void printStatus() {
     Serial.printf(

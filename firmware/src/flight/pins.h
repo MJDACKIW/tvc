@@ -13,7 +13,7 @@ constexpr int kHxSck = 7;     // pairs) upstream in analog hardware -- one logic
 
 // Reserved for the radio phase; not driven by this build.
 constexpr int kRfm95Irq = 8;
-constexpr int kRfm95Rst = 9;    // moved from 24 to free Wire2 for the second encoder
+constexpr int kRfm95Rst = 24;    // moved from 24 to free Wire2 for the second encoder
 constexpr int kRfm95Cs = 10;
 // SPI0 MOSI/MISO/SCK = 11/12/13, fixed by silicon, reserved alongside the above.
 
@@ -33,5 +33,9 @@ constexpr int kLedTvcActive = 22;
 
 constexpr int kModeJumperA = 26;  // INPUT_PULLUP; read-only this phase, mode is fixed STAND_OPEN
 constexpr int kModeJumperB = 27;
+
+// Resistor-divider battery voltage sense, added for TELEM's batt_mv (SPEC.md Section 4.7).
+// Scale factor is params::power::batt_adc_to_mv (MEASURE until the divider is characterized).
+constexpr int kBattSense = A16;
 
 }  // namespace tvc::pins
