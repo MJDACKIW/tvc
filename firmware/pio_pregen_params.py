@@ -1,5 +1,6 @@
 """PlatformIO pre-build step: regenerate core/params.h from params.yaml before every
-build/test, so it can never go stale. See SPEC.md Section 2. Also stamps the current git
+build/test, so it can never go stale. See SPEC.md Section 2. Also regenerates
+protocol/event_codes.h from protocol/event_codes.yaml (SPEC 4.7) and stamps the current git
 short hash into src/flight/git_hash.h for the SD log header (SPEC 4.6).
 
 SCons exec's extra_scripts as source text rather than importing them as a module, so
@@ -13,6 +14,7 @@ from pathlib import Path
 
 repo_root = Path(env.Dir("#").abspath).parent
 subprocess.run(["python3", str(repo_root / "tools" / "gen_params.py")], check=True, cwd=repo_root)
+subprocess.run(["python3", str(repo_root / "tools" / "gen_protocol.py")], check=True, cwd=repo_root)
 
 try:
     git_hash = subprocess.run(

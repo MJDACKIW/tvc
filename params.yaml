@@ -50,7 +50,8 @@ pyro:
   continuity_ok_max_adc: 3800
   heartbeat_timeout_ms: 1000
 telemetry:
-  rate_hz: 20
+  telem_rate_hz: 10         # SPEC.md Section 4.7: TELEM downlink rate (was one 20 Hz "rate_hz"
+  status_rate_hz: 1         # before the link-budget math in 4.7 split it into TELEM + STATUS)
   lora_freq_mhz: 915.0
   lora_sf: 7
   lora_bw_khz: 125
@@ -60,3 +61,8 @@ logging:
   sd_rate_hz: 300
   ring_seconds: 12
   flash_mirror_rate_hz: 50
+power:
+  batt_adc_to_mv: MEASURE   # resistor-divider scale: mV of real battery voltage per raw ADC
+                             # count at BATT_SENSE_PIN (SPEC.md Section 4.5). Hang a multimeter
+                             # on the battery, read the raw ADC count at the same instant, and
+                             # compute mV / count.

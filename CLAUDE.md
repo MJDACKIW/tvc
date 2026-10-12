@@ -21,6 +21,16 @@ unrelated `.venv` once broke bare `pio` on PATH). `pio test -e native` auto-rege
 `core/*.cpp` also builds standalone as a shared library for the Python side:
 `make -C core native` (needs clang or another C++17 compiler).
 
+## Ground station and sim (ground/README.md)
+
+```
+ground/venv/bin/python ground/gs.py --replay data/synthetic/SF_SYNTH.BIN   # or --sim, or --port
+ground/venv/bin/python -m pytest ground/tests                              # codec + GUI acceptance
+```
+
+Use `ground/venv`, never a dot-named venv: this folder is iCloud-synced and files inside
+dot-directories get the macOS hidden flag, which stops Qt loading its plugins.
+
 ## Execution environment
 
 All phases run locally on this Mac. The repo root is the working directory. `legacy/` is

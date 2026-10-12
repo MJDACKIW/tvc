@@ -1,0 +1,88 @@
+# Single source of truth for EVENT.event_code (SPEC.md Section 4.7). tools/gen_protocol.py
+# turns this into protocol/event_codes.h (firmware enum) and protocol/event_codes.json (for
+# any Python decoder / the future ground GUI), so the two can never drift apart the way
+# firmware/src/flight/record.h's fault_bits and tools/decode_log.py's FAULT_BITS can (that pair
+# is still hand-synced; this is the improved pattern the telemetry protocol asks for).
+#
+# `code` is the wire value (uint8, must be unique and 0-255). `aux_meaning` is documentation
+# only, for whoever reads a decoded EVENT line; it is not encoded on the wire.
+schema: 1
+events:
+  - name: BOOT
+    code: 0
+    aux_meaning: "unused"
+  - name: SELFTEST_PASS
+    code: 1
+    aux_meaning: "unused"
+  - name: SELFTEST_FAIL
+    code: 2
+    aux_meaning: "fault_bits, low 16 bits (aux is signed 16-bit; cast on decode)"
+  - name: STATE_IDLE
+    code: 3
+    aux_meaning: "unused"
+  - name: STATE_ARMED
+    code: 4
+    aux_meaning: "unused"
+  - name: STATE_COUNTDOWN
+    code: 5
+    aux_meaning: "unused"
+  - name: STATE_IGNITE
+    code: 6
+    aux_meaning: "unused"
+  - name: STATE_BURN
+    code: 7
+    aux_meaning: "unused"
+  - name: STATE_TAILOFF
+    code: 8
+    aux_meaning: "unused"
+  - name: STATE_SAFE
+    code: 9
+    aux_meaning: "unused"
+  - name: STATE_FAULT
+    code: 10
+    aux_meaning: "unused"
+  - name: COUNTDOWN_TICK
+    code: 11
+    aux_meaning: "seconds remaining (matches the T-n buzzer/console tick)"
+  - name: FIRE_CONFIRMED
+    code: 12
+    aux_meaning: "unused"
+  - name: ABORT_ARM_SWITCH_OPENED
+    code: 13
+    aux_meaning: "unused"
+  - name: ABORT_PRELAUNCH_TILT
+    code: 14
+    aux_meaning: "tilt x100 deg, whichever axis tripped it"
+  - name: ABORT_NO_FIRE_CONFIRM
+    code: 15
+    aux_meaning: "unused"
+  - name: ABORT_CONTINUITY_LOST
+    code: 16
+    aux_meaning: "unused"
+  - name: ABORT_NO_IGNITION
+    code: 17
+    aux_meaning: "unused"
+  - name: ABORT_MANUAL
+    code: 18
+    aux_meaning: "unused (operator-issued ABORT, console or uplink)"
+  - name: SERVO_RATE_FAULT
+    code: 19
+    aux_meaning: "unused"
+  - name: TARE_OK
+    code: 20
+    aux_meaning: "unused"
+  - name: TARE_FAILED
+    code: 21
+    aux_meaning: "unused"
+  - name: DRY_RUN_ON
+    code: 22
+    aux_meaning: "unused"
+  - name: DRY_RUN_OFF
+    code: 23
+    aux_meaning: "unused"
+  - name: PROFILE_SET
+    code: 24
+    aux_meaning: "profile index (Profile enum, record.h)"
+  - name: HEARTBEAT_LOST
+    code: 25
+    aux_meaning: "ms since last heartbeat"

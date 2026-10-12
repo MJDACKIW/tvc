@@ -53,18 +53,23 @@ tvc/
 │   └── test/                    # pio unit tests for core/, run with `pio test -e native`
 ├── ground/
 │   ├── gs.py                    # PyQt6 + pyqtgraph ground station GUI
-│   ├── link.py                  # serial framing, packet codec (shared definitions with firmware/protocol.h)
+│   ├── model.py                 # GUI state + command-enabling rules, Qt-free (tested headless)
+│   ├── link.py                  # serial / sim-socket / replay transports (codec: protocol/telem_codec.py)
+│   ├── sd_replay.py             # SD log -> the downlink frames the vehicle would have sent (--replay)
 │   ├── recorder.py               # redundant ground-side logging
+│   ├── tests/                   # codec-vs-protocol.h check; offscreen --replay/--sim acceptance
 │   └── requirements.txt
 ├── sim/
 │   ├── tvc_params.py            # GENERATED
 │   ├── vehicle.py                # rigid-body dynamics, thrust curve, aero disturbance (paper §6.1, §3.4.2)
 │   ├── sensors.py                # MPU-6050 noise model, gravity-tilt measurement (paper §6.7, §6.11)
 │   ├── run_sim.py                # closed-loop RK4 @ 1 ms, control @ 150 Hz; uses core via ctypes
+│   ├── serve.py                  # run_sim.py --serve: virtual vehicle on a TCP socket for gs.py --sim
 │   ├── figures/                  # regenerates paper Figs 2–11 (existing plots may be ported here)
 │   └── data/estes_e12.eng       # NAR thrust curve points
 ├── protocol/
-│   └── protocol.h                # packet structs (C), also parsed by ground/link.py via a generated JSON
+│   ├── protocol.h                # packet structs (C)
+│   └── telem_codec.py            # the one Python codec for them (checked against protocol.h by a test)
 ├── CLAUDE.md                    # short: pointers to this file + build/flash commands
 └── README.md
 ```
@@ -296,6 +301,10 @@ Wire1 (AS5600 #1 0x36)  SDA 17 / SCL 16  -> CONFLICT with A2; use PYRO_CONT_PIN 
 Wire2 (AS5600 #2 0x36)  SDA 25 / SCL 24
 STATUS LEDs     20, 21, 22 (power/IMU ok, armed, TVC active)
 MODE JUMPERS    26, 27 (input pullup)
+BATT_SENSE_PIN  A16    // resistor-divider battery voltage sense, added with the telemetry
+                        // protocol (Section 4.7): TELEM's batt_mv field needs a real ADC input,
+                        // and none was assigned before. Scale factor is params.yaml
+                        // power.batt_adc_to_mv (MEASURE — no divider ratio invented here).
 SD              built-in SDIO
 ```
 Final: `PYRO_CONT_PIN = A14 (pin 38)`. AS5600 has a fixed address, hence one per I²C bus. Flag
@@ -330,19 +339,104 @@ float thrust_N; int16 gyro[3]; int16 accel[3]; float xhat_p, xhat_y; float u_p, 
 float delta_p, delta_y; float enc_p, enc_y; float K_p, K_y; uint16 servo_us_p, servo_us_y;
 uint8 pyro; uint8 cont_adc8; uint16 loop_us; uint16 crc16;`
 
-### 4.7 Telemetry protocol (`protocol/protocol.h`, shared)
-Framing on both radio and USB: `0xAA 0x55 | len | type | payload | crc16`. Max payload 48 bytes
-(fits one LoRa frame at SF7/BW125 with margin; ~5.5 kbps usable ⇒ 20 Hz × ~60 B ≈ 9.6 kbps is
-**too much** — so downlink is 10 Hz `TELEM` + 1 Hz `STATUS`, and `TELEM` carries only
-`t_ms, state, thrust, xhat_p, xhat_y, u_p, u_y, enc_p, enc_y, gyro_z, cont_adc8, batt_mv`
-as int16 fixed-point. Full rate stays on SD.)
+### 4.7 Telemetry protocol (`protocol/protocol.h`, shared) — FINALIZED
 
-Downlink: `TELEM` (10 Hz), `STATUS` (1 Hz: mode, fault_bits, params hash, SD bytes, flash
-bytes, rssi_of_last_uplink, boot count, missing-MEASURE list), `EVENT` (state changes,
-countdown ticks, faults; retransmitted 3×), `ACK`.
-Uplink: `HEARTBEAT` (2 Hz from GUI), `SET_MODE`, `SET_PROFILE`, `TARE`, `ARM`, `DISARM`,
-`COUNTDOWN`, `FIRE_CONFIRM(token)`, `ABORT`, `DRY_RUN(bool)`, `PING`, `DUMP_FLASH` (USB only).
-Every uplink is ACKed with the command's sequence number; GUI shows unacked commands in amber.
+Framing on both radio and USB: `0xAA 0x55 | len | type | payload | crc16`, little-endian
+throughout. `len` counts payload bytes only (max 48, one byte); `crc16` is CRC-16/CCITT-FALSE
+(same polynomial and init value as `firmware/src/flight/record.h`'s `crc16()`, but computed
+over `len ++ type ++ payload`, not the payload alone) and is 2 bytes. Max payload 48 bytes fits
+one LoRa frame at SF7/BW125 with margin; ~5.5 kbps usable ⇒ 20 Hz × ~60 B ≈ 9.6 kbps is **too
+much**, which is why downlink is 10 Hz `TELEM` + 1 Hz `STATUS` rather than one packet at 20 Hz.
+Full rate stays on SD (Section 4.6).
+
+**TELEM (10 Hz, 27-byte payload).** Every field int16/uint16 unless noted:
+```
+t_ms       int16   ms since ignition; negative pre-launch (t_ms = 0 at IGNITE's gate-high)
+state      uint8   tvc::flight::State (record.h)
+thrust     int16   x10   (N)
+xhat_p     int16   x100  (deg)
+xhat_y     int16   x100  (deg)
+u_p        int16   x100  (deg)
+u_y        int16   x100  (deg)
+enc_p      int16   x100  (deg)
+enc_y      int16   x100  (deg)
+gyro_z     int16   x10   (deg/s)
+K_p        uint16  x1000 (Kalman gain, 0..1)
+K_y        uint16  x1000
+flags      uint8   bit0 pitch-gate-ok, bit1 yaw-gate-ok, bit2 pitch-saturated,
+                    bit3 yaw-saturated, bit4 tvc-active, bit5 dry-run,
+                    bit6 arm-switch-closed, bit7 reserved
+cont_adc8  uint8   continuity ADC, 12-bit -> 8-bit (same shift as Record.cont_adc8)
+batt_mv    uint16  battery voltage, millivolts (BATT_SENSE_PIN x power.batt_adc_to_mv)
+```
+Total: 2+1+2+2+2+2+2+2+2+2+2+2+1+1+2 = 27 bytes. `tvc-active` mirrors the existing
+`STATUS LED` condition (`state == BURN`); `pitch/yaw-gate-ok` is each axis's own
+`ShadowOut.accel_used`, not one shared flag, so a future per-axis accelerometer gate needs no
+protocol change; `*-saturated` is `u_raw != u_cmd` for that axis (identical condition to the
+PID's own `saturated_last`, paper §3.1/Appendix A.3). `arm-switch-closed` (added in the
+ground-GUI phase, using a previously reserved bit) is `ARM_SENSE_PIN` read as closed, so the GUI
+can gate `ARM` on it (Section 5).
+
+**STATUS (1 Hz, 42-byte payload).** Existing fields (mode, fault_bits, params hash, SD/flash
+bytes, uplink RSSI, boot count, missing-MEASURE list) plus the cumulative fields below, all
+computed and integrated **on the vehicle**, not the ground station, so they are correct even
+across radio packet loss:
+```
+mode                 uint8
+fault_bits            uint16
+params_hash6          6 raw bytes  (first 6 bytes of SHA-256(params.yaml); the same truncation
+                                    gen_params.py already prints as hash[:12] hex chars)
+sd_bytes_written      uint32
+flash_bytes_written   uint32
+rssi_last_uplink_dbm  int8         (RSSI of the most recently received uplink frame)
+boot_count            uint16
+missing_measure_bits  uint32       (bit i set == params::measure_bits::* index i is still NaN;
+                                    core/measure_bits.json names each bit — see Section 2)
+loop_overrun_count    uint16
+sat_pct_p             uint8        (% of control ticks this run with pitch saturated, 0-100)
+sat_pct_y             uint8
+running_iae_p         uint16 x100  (integral of |x_hat_p| dt since boot, deg*s)
+running_iae_y         uint16 x100
+peak_thrust           uint16 x10   (N)
+peak_tilt_p           uint16 x100  (max |x_hat_p| this run, deg)
+peak_tilt_y           uint16 x100
+fw_git_hash           4 raw bytes  (first 4 bytes of kFirmwareGitHash's hex prefix; the
+                                    "-dirty" suffix, if any, is not encoded here — it is still
+                                    visible in the SD log header and the USB console)
+```
+Total: 1+2+6+4+4+1+2+4+2+1+1+2+2+2+2+2+4 = 42 bytes.
+
+**EVENT (5-byte payload, no free-text):** `t_ms int16, event_code uint8, aux int16`. Sent on
+state changes, countdown ticks, and faults; retransmitted 3× (best-effort redundancy against
+loss, since EVENT is not integrated like STATUS's cumulative fields). `event_code` values come
+from one generated table (`protocol/event_codes.yaml` -> `protocol/event_codes.h` for firmware,
+`protocol/event_codes.json` for any Python decoder, via `tools/gen_protocol.py`), so the GUI
+renders messages by looking up the code, never by parsing a transmitted string.
+
+Downlink packet types: `TELEM`, `STATUS`, `EVENT`, `ACK`.
+Uplink packet types: `HEARTBEAT` (2 Hz from GUI), `SET_MODE`, `SET_PROFILE`, `TARE`, `ARM`,
+`DISARM`, `COUNTDOWN`, `FIRE_CONFIRM(token)`, `ABORT`, `DRY_RUN(bool)`, `PING`, `DUMP_FLASH`
+(USB only). Every uplink is ACKed with the command's sequence number; GUI shows unacked
+commands in amber. This phase's vehicle firmware recognizes `HEARTBEAT` (freshness + RSSI
+tracking for `STATUS.rssi_last_uplink_dbm`) over the radio link; dispatching the rest of the
+uplink commands from radio (they already work from the USB console) is left to the ground-GUI
+phase (Section 9 Phase 5), flagged here rather than silently stubbed.
+
+**Uplink payloads and ACK** (defined in the ground-GUI phase; `protocol.h` has the structs).
+Every uplink payload starts with `seq uint16`, incremented by the ground station per command:
+```
+HEARTBEAT, TARE, ARM, DISARM, COUNTDOWN, ABORT, PING, DUMP_FLASH   seq                 (2 B)
+SET_MODE (Mode), SET_PROFILE (Profile), DRY_RUN (0/1)              seq, value uint8    (3 B)
+FIRE_CONFIRM                                                       seq, token uint16   (4 B)
+ACK (downlink)          seq uint16, cmd_type uint8, result uint8, aux uint16           (6 B)
+```
+`result`: 0 OK, 1 wrong state, 2 arm switch open, 3 MEASURE missing, 4 bad token, 5 bad
+argument, 6 no continuity, 7 unsupported, 8 heartbeat stale (ARM only: refused rather than
+armed and then immediately dropped to SAFE by the heartbeat check). `aux` carries the
+`fire_token` in COUNTDOWN's ACK and is 0 otherwise. `DISARM` returns ARMED → IDLE, and SAFE →
+IDLE (the USB console's `RESET`). HEARTBEATs are ACKed like everything else, which is what
+the GUI's ACK-latency readout measures. As of this phase, `sim/run_sim.py --serve` implements
+all of this; the vehicle firmware still dispatches only HEARTBEAT from radio.
 
 ### 4.8 Feather M0 bridge
 Stateless: LoRa ↔ USB CDC, same framing both directions, appends RSSI/SNR to each downlink
@@ -562,4 +656,7 @@ lib_deps = greiman/SdFat@^2.2.2
 `HX_OFFSET`/`HX_SCALE`; $R_{B\leftarrow S}$; servo µs/deg and neutral per axis; Kp, Kd, Q, R
 (start from Ziegler–Nichols on the stand per paper §3.1, with the sim used to pick Q/R);
 vehicle mass, inertia (bifilar pendulum), $r$ (gimbal pivot to CoM); stand inertia; $C_{N\alpha}$
-from OpenRocket. Each is a `MEASURE` in `params.yaml`; the firmware will not arm without them.
+from OpenRocket; `power.batt_adc_to_mv` (Section 4.5/4.7 — multimeter on the battery vs. raw
+`BATT_SENSE_PIN` ADC count, taken together). Each is a `MEASURE` in `params.yaml`; the firmware
+will not arm without them (STAND_OPEN's own required subset is narrower — see
+`measureGateOk()` in `sequencer.cpp`).
