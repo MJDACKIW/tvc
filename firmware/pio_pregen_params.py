@@ -62,8 +62,16 @@ try:
         ["git", "rev-parse", "--short=12", "HEAD"],
         check=True, cwd=repo_root, capture_output=True, text=True,
     ).stdout.strip()
+    # Only paths that can change what gets built count. Untracked CAD, paper drafts, or notes
+    # sitting next to the code must not make every firmware image report "-dirty".
+    build_inputs = [
+        "core", "protocol", "params.yaml", "tools/gen_params.py", "tools/gen_protocol.py",
+        "firmware/platformio.ini", "firmware/pio_pregen_params.py", "firmware/src",
+        "firmware/test",
+    ]
     dirty = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True,
+        ["git", "status", "--porcelain", "--", *build_inputs],
+        cwd=repo_root, capture_output=True, text=True,
     ).stdout.strip()
     if dirty:
         git_hash += "-dirty"
