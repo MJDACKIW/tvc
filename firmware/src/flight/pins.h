@@ -11,9 +11,10 @@ constexpr int kBuzzer = 4;
 constexpr int kHxDout = 6;    // single HX711, summed across the four load cells (two diagonal
 constexpr int kHxSck = 7;     // pairs) upstream in analog hardware -- one logical channel here.
 
-// Reserved for the radio phase; not driven by this build.
+// RFM95W on the vehicle (radio.cpp). RST is on 9, not 24: pin 24 is Wire2 SCL (encoder #2),
+// and radio::begin() drives RST as a GPIO output (SPEC.md Section 4.5).
 constexpr int kRfm95Irq = 8;
-constexpr int kRfm95Rst = 24;    // moved from 24 to free Wire2 for the second encoder
+constexpr int kRfm95Rst = 9;     // moved from 24 to free Wire2 for the second encoder
 constexpr int kRfm95Cs = 10;
 // SPI0 MOSI/MISO/SCK = 11/12/13, fixed by silicon, reserved alongside the above.
 
