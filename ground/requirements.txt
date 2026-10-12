@@ -1,0 +1,8 @@
+# Ground station (gs.py), sim/run_sim.py --serve, and their tests. Python 3.11+.
+# Put the venv at ground/venv, not ground/.venv: see _qt_env.py (hidden-flag issue).
+PyQt6>=6.6
+pyqtgraph>=0.13
+numpy>=1.26
+pyserial>=3.5
+pyyaml>=6.0
+pytest>=8
