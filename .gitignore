@@ -73,3 +73,6 @@ core/libtvccore.dylib
 
 # Regenerable test input (tools/synth_sd_log.py)
 data/synthetic/
+
+# Written by ./tvc (last Feather upload stamp); machine-local state
+data/bringup_state.json

@@ -1,0 +1,1237 @@
+#!/usr/bin/env python3
+"""tvc: build, flash, and test the TVC rocket from one place. BRINGUP.md has the order to run
+these in.
+
+    ./tvc ports                      list the Teensy and the Feather by name
+    ./tvc test                       native tests, parity, codec tests, GUI offscreen tests
+    ./tvc flash teensy|feather|all   build + upload, then check what the board reports
+    ./tvc monitor teensy|feather     watch a board
+    ./tvc selftest                   run SELFTEST on the Teensy over USB, one line per check
+    ./tvc link                       60 s radio test through the Feather
+    ./tvc gs [--sim|--replay F|--live]   ground station
+    ./tvc ready                      pre-fire checklist: GREEN / RED / MANUAL
+
+Every command prints PASS / FAIL / WARN / INFO lines, and after a FAIL one "next:" line saying
+what to do. Nothing here sends ARM, COUNTDOWN or FIRE_CONFIRM over USB, and nothing here fires.
+
+It needs no packages of its own: it re-runs itself under ground/venv (pyserial, PyYAML and
+PyQt6 live there) and calls PlatformIO by its full path. Paths are always passed as argument
+lists, never through a shell, so the spaces and the curly apostrophe in this folder's name are
+harmless. ground/venv is deliberately not a dot-folder: this repo is iCloud-synced and files
+in dot-folders get the macOS hidden flag, which stops Qt from loading its plugins.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent
+VENV_DIR = REPO / "ground" / "venv"
+VENV_PY = VENV_DIR / "bin" / "python"
+PIO = Path.home() / ".platformio" / "penv" / "bin" / "pio"
+STATE_FILE = REPO / "data" / "bringup_state.json"
+
+TEENSY_VID = 0x16C0
+FEATHER_VID = 0x239A
+FEATHER_PID_FIRMWARE = 0x800B
+FEATHER_PID_BOOTLOADER = 0x000B
+
+# Paths whose contents change what gets built. Keep in step with build_inputs in
+# firmware/pio_pregen_params.py, which uses the same list to decide "-dirty".
+BUILD_INPUTS = [
+    "core", "protocol", "params.yaml", "tools/gen_params.py", "tools/gen_protocol.py",
+    "firmware/platformio.ini", "firmware/pio_pregen_params.py", "firmware/src", "firmware/test",
+]
+
+# Vehicle states in which flashing or re-running SELFTEST must not happen.
+LIVE_STATES = {"ARMED", "COUNTDOWN", "IGNITE", "BURN", "TAILOFF"}
+
+PERMANENT_RED = ("Firmware runs 1-state Kalman; paper/sim validated 2-state. "
+                 "Merge pending.")
+
+DOUBLE_TAP = ("double-tap the Feather's RESET button (two taps within half a second, the "
+              "LED then pulses slowly), then run this command again right away")
+
+
+# ---- output ----------------------------------------------------------------------------
+
+_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+_CODES = {"PASS": "32", "GREEN": "32", "FAIL": "31", "RED": "31", "WARN": "33",
+          "MANUAL": "33", "INFO": "36"}
+
+
+def _tag(kind: str) -> str:
+    text = f"{kind:<6}"
+    return f"\033[{_CODES[kind]}m{text}\033[0m" if _COLOR and kind in _CODES else text
+
+
+class Results:
+    """Collects and prints PASS/FAIL lines. quiet=True stores them without printing."""
+
+    def __init__(self, quiet: bool = False):
+        self.quiet = quiet
+        self.lines: list[tuple[str, str, str | None]] = []
+        self.fails = 0
+
+    def _add(self, kind: str, msg: str, nxt: str | None = None):
+        self.lines.append((kind, msg, nxt))
+        if not self.quiet:
+            print(f"{_tag(kind)} {msg}")
+            if nxt:
+                print(f"       next: {nxt}")
+            sys.stdout.flush()
+
+    def passed(self, msg: str):
+        self._add("PASS", msg)
+
+    def failed(self, msg: str, nxt: str):
+        self.fails += 1
+        self._add("FAIL", msg, nxt)
+
+    def warn(self, msg: str, nxt: str | None = None):
+        self._add("WARN", msg, nxt)
+
+    def info(self, msg: str):
+        self._add("INFO", msg)
+
+    @property
+    def ok(self) -> bool:
+        return self.fails == 0
+
+    def print_all(self):
+        for kind, msg, nxt in self.lines:
+            print(f"{_tag(kind)} {msg}")
+            if nxt:
+                print(f"       next: {nxt}")
+
+
+def die(msg: str, nxt: str, code: int = 2):
+    r = Results()
+    r.failed(msg, nxt)
+    sys.exit(code)
+
+
+# ---- bootstrap: run under ground/venv ----------------------------------------------------
+
+def ensure_venv():
+    if os.environ.get("TVC_NO_VENV"):
+        return
+    try:
+        inside = Path(sys.prefix).resolve() == VENV_DIR.resolve()
+    except OSError:
+        inside = False
+    if inside:
+        return
+    if VENV_PY.exists():
+        os.execv(str(VENV_PY), [str(VENV_PY), str(Path(__file__).resolve()), *sys.argv[1:]])
+    die("ground/venv not found",
+        "python3 -m venv ground/venv && ground/venv/bin/python -m pip install "
+        "-r ground/requirements.txt   (Python 3.11+; name it ground/venv, not a dot-folder)")
+
+
+# ---- small helpers -----------------------------------------------------------------------
+
+def run(cmd: list[str], cwd: Path = REPO, env: dict | None = None, timeout: float | None = None):
+    full_env = dict(os.environ)
+    if env:
+        full_env.update(env)
+    try:
+        p = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=full_env,
+                           timeout=timeout)
+    except FileNotFoundError as exc:
+        return 127, str(exc)
+    except subprocess.TimeoutExpired as exc:
+        out = (exc.stdout or b"")
+        out = out.decode(errors="replace") if isinstance(out, bytes) else out
+        return 124, out + f"\n(timed out after {timeout:.0f} s)"
+    return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def pio(args: list[str], timeout: float = 900):
+    exe = str(PIO) if PIO.exists() else None
+    if exe is None:
+        from shutil import which
+        exe = which("pio")
+    if exe is None:
+        return 127, f"PlatformIO not found at {PIO}"
+    return run([exe, *args], cwd=REPO / "firmware", env={"TVC_PYTHON": sys.executable},
+               timeout=timeout)
+
+
+def tail(text: str, n: int = 12) -> str:
+    return "\n".join("         " + ln for ln in text.strip().splitlines()[-n:])
+
+
+def git_head() -> str:
+    rc, out = run(["git", "rev-parse", "--short=12", "HEAD"])
+    return out.strip() if rc == 0 else "unknown"
+
+
+def git_dirty_inputs() -> bool:
+    rc, out = run(["git", "status", "--porcelain", "--", *BUILD_INPUTS])
+    return rc == 0 and bool(out.strip())
+
+
+def hash_is_current(reported: str) -> tuple[bool, str]:
+    """Does a hash a board reports correspond to what HEAD would build? (ok, explanation)"""
+    head = git_head()
+    base = reported.removesuffix("-dirty")
+    if reported.endswith("-dirty"):
+        return False, (f"{reported} was built from uncommitted changes to build inputs "
+                       "(commit them, then reflash)")
+    if base == head:
+        return True, f"{reported} matches HEAD"
+    rc, _ = run(["git", "cat-file", "-e", f"{base}^{{commit}}"])
+    if rc != 0:
+        return False, f"{reported} is not a commit in this repo (flashed from another checkout?)"
+    rc, _ = run(["git", "diff", "--quiet", base, "HEAD", "--", *BUILD_INPUTS])
+    if rc == 0:
+        return True, f"{reported} differs from HEAD {head} only outside the build inputs"
+    return False, f"{reported} is older than HEAD {head} and build inputs changed since"
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state: dict):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def load_params() -> dict:
+    import yaml
+    return yaml.safe_load((REPO / "params.yaml").read_text())
+
+
+# ---- serial ports --------------------------------------------------------------------------
+
+def all_ports():
+    from serial.tools import list_ports
+    return list(list_ports.comports())
+
+
+def find_boards():
+    ps = all_ports()
+    return ([p for p in ps if p.vid == TEENSY_VID], [p for p in ps if p.vid == FEATHER_VID])
+
+
+def describe_feather(p) -> str:
+    if p.pid == FEATHER_PID_BOOTLOADER:
+        return "Feather M0 in its bootloader (double-tap reset is active)"
+    if p.pid == FEATHER_PID_FIRMWARE:
+        return "Feather M0 running firmware"
+    return "Adafruit board"
+
+
+def port_holders(device: str) -> list[tuple[int, str, str]]:
+    """(pid, short name, full command line) for every other process holding the device."""
+    rc, out = run(["lsof", "-F", "pc", device], timeout=8)
+    holders, pid = [], None
+    for line in out.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith("c") and pid is not None and pid != os.getpid():
+            _, cmdline = run(["ps", "-o", "command=", "-p", str(pid)], timeout=5)
+            holders.append((pid, line[1:], cmdline.strip()))
+    return holders
+
+
+# Processes that are only watching a port and are safe to close for the user.
+CLOSABLE = ("screen", "minicom", "picocom", "tio ", "miniterm", "pio device monitor",
+            "platformio device monitor", "tvc monitor", "./tvc monitor", "telem_cli.py")
+
+
+def free_port(r: Results, device: str) -> bool:
+    """Close monitors holding the port; refuse (FAIL) if something else holds it."""
+    holders = port_holders(device)
+    if not holders:
+        return True
+    for pid, name, cmdline in holders:
+        if any(marker in cmdline or marker.strip() == name for marker in CLOSABLE):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            r.info(f"closed {name} (pid {pid}) which was holding {device}")
+        else:
+            r.failed(f"{device} is busy: held by {name} (pid {pid}: {cmdline[:70]})",
+                     f"close that program (for the ground station, close its window), then "
+                     "run this again")
+            return False
+    time.sleep(1.0)
+    if port_holders(device):
+        r.failed(f"{device} is still busy after closing the monitor",
+                 "close whatever has the port open (lsof " + device + " shows it) and retry")
+        return False
+    return True
+
+
+def resolve_port(r: Results, kind: str, override: str | None) -> str | None:
+    """Return the serial device for 'teensy' or 'feather', or print a FAIL and return None."""
+    env_override = os.environ.get(f"TVC_{kind.upper()}_PORT")
+    if override or env_override:
+        return override or env_override
+    teensy, feather = find_boards()
+    found = teensy if kind == "teensy" else feather
+    if len(found) > 1:
+        names = ", ".join(p.device for p in found)
+        r.failed(f"more than one {kind} serial port is present ({names})",
+                 "unplug the extra board, or pass --port to say which one")
+        return None
+    if not found:
+        if kind == "teensy":
+            r.failed("Teensy not detected",
+                     "plug in the Teensy with a data USB cable (charge-only cables have no "
+                     "data lines); if it still does not show, press its program button once")
+        else:
+            r.failed("Feather not detected: try double-tap reset", DOUBLE_TAP)
+        return None
+    return found[0].device
+
+
+class Console:
+    """Line-oriented access to the Teensy's USB console (115200 baud)."""
+
+    def __init__(self, port: str, baud: int = 115200):
+        import serial
+        self.ser = serial.Serial(port, baud, timeout=0.1)
+        self._buf = b""
+
+    def close(self):
+        try:
+            self.ser.close()
+        except OSError:
+            pass
+
+    def send(self, line: str):
+        self.ser.write(line.encode() + b"\n")
+        self.ser.flush()
+
+    def collect(self, stop_when=None, timeout: float = 5.0) -> tuple[list[str], bool]:
+        lines: list[str] = []
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            chunk = self.ser.read(256)
+            if chunk:
+                self._buf += chunk
+            while b"\n" in self._buf:
+                raw, self._buf = self._buf.split(b"\n", 1)
+                line = raw.decode(errors="replace").rstrip("\r")
+                lines.append(line)
+                if stop_when and stop_when(line):
+                    return lines, True
+        return lines, False
+
+
+STATUS_RE = re.compile(
+    r"^\[(?P<state>[A-Z_]+)\] mode=(?P<mode>\S+) profile=(?P<profile>\S+) dry_run=(?P<dry>\d) "
+    r"thrust=(?P<thrust>\S+)N enc=\((?P<ep>\S+),(?P<ey>\S+)\)deg arm_sw=(?P<arm>\S+) "
+    r"cont=(?P<cont>\S+) fault_bits=0x(?P<faults>[0-9A-Fa-f]+) overruns=(?P<overruns>\d+)"
+    r"(?: fw=(?P<fw>\S+))?")
+BANNER_FW_RE = re.compile(r"firmware ready\. fw=(\S+)")
+
+
+def query_status(con: Console, timeout: float = 3.0, tries: int = 3) -> dict | None:
+    for _ in range(tries):
+        con.ser.reset_input_buffer()
+        con._buf = b""
+        con.send("STATUS")
+        lines, _ = con.collect(lambda ln: STATUS_RE.match(ln) is not None, timeout)
+        for ln in lines:
+            m = STATUS_RE.match(ln)
+            if m:
+                d = m.groupdict()
+                d["faults"] = int(d["faults"], 16)
+                d["overruns"] = int(d["overruns"])
+                return d
+    return None
+
+
+# ---- generators and tests ----------------------------------------------------------------
+
+def generate(r: Results) -> bool:
+    ok = True
+    for script in ("gen_params.py", "gen_protocol.py"):
+        rc, out = run([sys.executable, str(REPO / "tools" / script)])
+        if rc != 0:
+            r.failed(f"tools/{script} failed",
+                     "fix the error above it: " + (out.strip().splitlines() or ["?"])[-1])
+            ok = False
+    if ok:
+        r.passed("generated core/params.h, core/measure_bits.json and protocol/event_codes.* "
+                 "from params.yaml / event_codes.yaml")
+    return ok
+
+
+SUITE_RE = re.compile(r"^native\s+(\S+)\s+(PASSED|FAILED|ERRORED|SKIPPED)\b")
+CASES_RE = re.compile(r"(\d+) test cases?: (\d+) succeeded")
+
+
+def run_tests(r: Results) -> bool:
+    if not generate(r):
+        r.failed("remaining tests not run", "fix the generator error first")
+        return False
+
+    rc, out = run(["make", "-C", str(REPO / "core"), "native"])
+    if rc == 0:
+        r.passed("core/ builds as libtvccore.dylib (clang, the same code the firmware uses)")
+    else:
+        r.failed("core/ did not build", "needs clang: run `xcode-select --install`, then retry; "
+                 "first error: " + next((ln for ln in out.splitlines() if "error" in ln),
+                                        "see make -C core native"))
+
+    rc, out = pio(["test", "-e", "native"], timeout=600)
+    suites = [(m.group(1), m.group(2)) for ln in out.splitlines()
+              if (m := SUITE_RE.match(ln.strip()))]
+    bad = [name for name, status in suites if status != "PASSED"]
+    cases = CASES_RE.search(out)
+    if rc == 0 and suites and not bad:
+        r.passed(f"native unit tests: {len(suites)} suites, {cases.group(2) if cases else '?'} "
+                 "cases passed")
+    elif rc == 127:
+        r.failed("PlatformIO not found", f"install it, then expect it at {PIO}")
+    else:
+        what = ", ".join(bad) if bad else "build step"
+        r.failed(f"native unit tests failed ({what})",
+                 "run `cd firmware && ~/.platformio/penv/bin/pio test -e native -vv` and read "
+                 "the first error")
+        if not r.quiet:
+            print(tail(out, 14))
+
+    rc, out = run([sys.executable, str(REPO / "tools" / "parity_test.py")], timeout=600)
+    last = (out.strip().splitlines() or [""])[-1]
+    if rc == 0 and "PASS" in last:
+        r.passed("parity: core/ via ctypes and via the firmware's native test are bitwise equal")
+    else:
+        r.failed("parity test failed: the simulation and firmware controllers differ",
+                 "run `ground/venv/bin/python tools/parity_test.py` and read which step "
+                 "differs first")
+        if not r.quiet:
+            print(tail(out, 10))
+
+    r.info("running codec and GUI offscreen tests (about 45 s)")
+    rc, out = run([sys.executable, "-m", "pytest", str(REPO / "ground" / "tests"), "-q"],
+                  env={"QT_QPA_PLATFORM": "offscreen"}, timeout=900)
+    summary = (out.strip().splitlines() or [""])[-1]
+    if rc == 0:
+        r.passed(f"codec and GUI offscreen tests: {summary}")
+    else:
+        r.failed(f"codec/GUI tests failed ({summary})",
+                 "run `ground/venv/bin/python -m pytest ground/tests -x -q` and read the "
+                 "first failure")
+        if not r.quiet:
+            print(tail(out, 14))
+    return r.ok
+
+
+def cmd_test(_args) -> int:
+    r = Results()
+    ok = run_tests(r)
+    print()
+    print("ALL TESTS PASSED" if ok else f"{r.fails} FAILED")
+    return 0 if ok else 1
+
+
+# ---- ports ---------------------------------------------------------------------------------
+
+def cmd_ports(_args) -> int:
+    r = Results()
+    teensy, feather = find_boards()
+    for p in teensy:
+        r.passed(f"Teensy found: {p.device} ({p.description}, {p.vid:04X}:{p.pid:04X})")
+        for pid, name, _ in port_holders(p.device):
+            r.warn(f"{p.device} is open in {name} (pid {pid})",
+                   "./tvc flash and ./tvc selftest need it free; close that program")
+    if not teensy:
+        r.failed("Teensy not detected",
+                 "plug in the Teensy with a data USB cable (charge-only cables have no data "
+                 "lines); if it still does not show, press its program button once")
+    for p in feather:
+        r.passed(f"Feather found: {p.device} ({describe_feather(p)}, "
+                 f"{p.vid:04X}:{p.pid:04X})")
+        for pid, name, _ in port_holders(p.device):
+            r.warn(f"{p.device} is open in {name} (pid {pid})",
+                   "close that program before flashing or running ./tvc link")
+        if p.pid == FEATHER_PID_BOOTLOADER:
+            r.warn("the Feather is sitting in its bootloader, not running the bridge firmware",
+                   "press RESET once to leave it, or run ./tvc flash feather to upload now")
+    if not feather:
+        r.failed("Feather not detected: try double-tap reset", DOUBLE_TAP)
+    others = [p.device for p in all_ports() if p.vid not in (TEENSY_VID, FEATHER_VID)]
+    if others:
+        r.info("ignored other serial ports: " + ", ".join(others))
+    print()
+    print("BOTH BOARDS PRESENT" if r.ok else f"{r.fails} MISSING")
+    return 0 if r.ok else 1
+
+
+# ---- flash ---------------------------------------------------------------------------------
+
+def wait_for_port(kind: str, timeout: float, feather_pid: int | None = None) -> str | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        teensy, feather = find_boards()
+        found = teensy if kind == "teensy" else feather
+        if feather_pid is not None:
+            found = [p for p in found if p.pid == feather_pid]
+        if found:
+            return found[0].device
+        time.sleep(0.5)
+    return None
+
+
+def read_teensy_hash(device: str, timeout: float = 45.0) -> tuple[str | None, list[str]]:
+    """Wait for the Teensy to finish booting and report its hash. Returns (hash, seen lines)."""
+    seen: list[str] = []
+    try:
+        con = Console(device)
+    except OSError:
+        return None, seen
+    try:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            lines, _ = con.collect(timeout=1.5)
+            seen += lines
+            for ln in lines:
+                m = BANNER_FW_RE.search(ln)
+                if m:
+                    return m.group(1), seen
+            con.send("STATUS")
+            more, _ = con.collect(lambda ln: STATUS_RE.match(ln) is not None, 2.0)
+            seen += more
+            for ln in more:
+                m = STATUS_RE.match(ln)
+                if m and m.group("fw"):
+                    return m.group("fw"), seen
+        return None, seen
+    finally:
+        con.close()
+
+
+def flash_teensy(r: Results, port_override: str | None) -> bool:
+    if not generate(r):
+        return False
+    dev = resolve_port(r, "teensy", port_override)
+    if not dev:
+        return False
+    if not free_port(r, dev):
+        return False
+
+    try:
+        con = Console(dev)
+        st = query_status(con, timeout=1.5, tries=1)
+        con.close()
+    except OSError:
+        st = None
+    if st and st["state"] in LIVE_STATES:
+        r.failed(f"the vehicle is {st['state']}: refusing to flash it",
+                 "send ABORT first (./tvc monitor teensy, then type ABORT), then flash")
+        return False
+
+    r.info("building and uploading teensy_flight (about 30 s); on boot the board sweeps both "
+           "servos +-5 deg, so keep the linkage clear")
+    rc, out = pio(["run", "-e", "teensy_flight", "-t", "upload"], timeout=900)
+    if rc != 0:
+        r.failed("teensy_flight build or upload failed",
+                 "read the last lines below; if the build passed and upload failed, press the "
+                 "Teensy's program button once and run this again")
+        print(tail(out, 14))
+        return False
+    r.passed("teensy_flight built and uploaded")
+
+    new_dev = wait_for_port("teensy", 25.0)
+    if not new_dev:
+        r.failed("the Teensy did not come back on USB after the upload",
+                 "unplug and replug it, then run ./tvc ports")
+        return False
+    r.info("waiting for the Teensy to boot and finish SELFTEST (up to 45 s)")
+    reported, seen = read_teensy_hash(new_dev)
+    if not reported:
+        r.failed("the Teensy booted but never reported a firmware hash",
+                 "open ./tvc monitor teensy and send STATUS; if there is no fw= field the "
+                 "upload did not take, so run ./tvc flash teensy again")
+        return False
+    ok, why = hash_is_current(reported)
+    if ok:
+        r.passed(f"Teensy reports firmware {why}")
+    else:
+        r.failed(f"Teensy reports firmware {why}", "run ./tvc flash teensy again")
+        return False
+    if any("SELFTEST: complete" in ln for ln in seen):
+        r.passed("boot SELFTEST completed (run ./tvc selftest for one line per check)")
+    elif any("SELFTEST: FAULT" in ln for ln in seen):
+        r.warn("boot SELFTEST ended in FAULT", "run ./tvc selftest to see which check failed")
+    return True
+
+
+def flash_feather(r: Results, port_override: str | None) -> bool:
+    if not generate(r):
+        return False
+    dev = resolve_port(r, "feather", port_override)
+    if not dev:
+        return False
+    if not free_port(r, dev):
+        return False
+
+    r.info("building and uploading feather_bridge (about 30 s)")
+    rc, out = pio(["run", "-e", "feather_bridge", "-t", "upload", "--upload-port", dev],
+                  timeout=900)
+    if rc != 0:
+        r.failed("feather_bridge build or upload failed", DOUBLE_TAP)
+        print(tail(out, 14))
+        return False
+    r.passed("feather_bridge built and uploaded (bossac wrote and verified the flash)")
+
+    new_dev = wait_for_port("feather", 20.0, FEATHER_PID_FIRMWARE)
+    if not new_dev:
+        r.failed("the Feather did not re-appear running the bridge firmware",
+                 "press RESET once; if ./tvc ports still shows only the bootloader, "
+                 "run ./tvc flash feather again")
+        return False
+    r.passed(f"Feather is running the bridge firmware on {new_dev}")
+
+    state = load_state()
+    head = git_head()
+    state["feather"] = {"hash": head + ("-dirty" if git_dirty_inputs() else ""),
+                        "port": new_dev,
+                        "time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    save_state(state)
+    r.info("the bridge only relays radio frames, so it cannot report its own hash; the upload "
+           f"verification above plus the stamp for {state['feather']['hash']} stand in for it")
+    return True
+
+
+def cmd_flash(args) -> int:
+    r = Results()
+    if args.target == "teensy":
+        ok = flash_teensy(r, args.port)
+    elif args.target == "feather":
+        ok = flash_feather(r, args.port)
+    else:
+        if args.port:
+            die("--port cannot be used with 'flash all'",
+                "flash each board separately with --port, or let both auto-detect")
+        ok_t = flash_teensy(r, None)
+        ok_f = flash_feather(r, None)
+        ok = ok_t and ok_f
+        print()
+        print(f"Teensy:  {'on current firmware' if ok_t else 'NOT verified'}")
+        print(f"Feather: {'on current firmware' if ok_f else 'NOT verified'}")
+    return 0 if ok else 1
+
+
+# ---- monitor ---------------------------------------------------------------------------------
+
+def cmd_monitor(args) -> int:
+    r = Results()
+    dev = resolve_port(r, args.target, args.port)
+    if not dev:
+        return 1
+    holders = port_holders(dev)
+    if holders:
+        pid, name, _ = holders[0]
+        r.failed(f"{dev} is busy: held by {name} (pid {pid})",
+                 "close that program, then run this again")
+        return 1
+    if args.target == "feather":
+        print(f"decoding radio frames from {dev} (Ctrl-C to stop)")
+        os.execv(sys.executable,
+                 [sys.executable, str(REPO / "tools" / "telem_cli.py"), "--port", dev])
+    import serial
+    import threading
+    ser = serial.Serial(dev, 115200, timeout=0.1)
+    stop = threading.Event()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                data = ser.read(256)
+            except (OSError, serial.SerialException):
+                return
+            if data:
+                sys.stdout.write(data.decode(errors="replace"))
+                sys.stdout.flush()
+
+    threading.Thread(target=reader, daemon=True).start()
+    print(f"teensy console on {dev} at 115200. Type a command and press Enter: STATUS, "
+          "SELFTEST, ABORT, HELP. Ctrl-C to quit.")
+    try:
+        if sys.stdin.isatty():
+            for line in sys.stdin:
+                ser.write(line.strip().encode() + b"\n")
+        else:
+            while True:
+                time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+        time.sleep(0.2)
+        ser.close()
+    return 0
+
+
+# ---- selftest ----------------------------------------------------------------------------------
+
+SELFTEST_LINE_RE = re.compile(r"^\[(PASS|FAIL|SKIP|WARN)\]\s+(.*)$")
+
+# (label, regex that finds the firmware's line for it, what to do if it fails)
+SELFTEST_CHECKS = [
+    ("IMU (MPU-6050 answers)", r"IMU WHO_AM_I",
+     "check the MPU-6050: 3.3 V, GND, SDA to pin 18, SCL to pin 19, address 0x68"),
+    ("SD card", r"^SD\b",
+     "reseat the SD card (FAT32 or exFAT, at least 64 MB free); the card is the primary log"),
+    ("flash mirror (LittleFS)", r"LittleFS",
+     "reflash with ./tvc flash teensy; the program-flash mirror did not mount"),
+    ("radio init", r"radio init",
+     "check the RFM95W: CS pin 10, IRQ pin 8, RST pin 9, SPI 11/12/13, 3.3 V, antenna "
+     "attached; then power-cycle the Teensy (radio init only runs at boot)"),
+    ("encoders (both AS5600)", r"^encoders? ",
+     "check the AS5600 boards: #1 on SDA 17 / SCL 16, #2 on SDA 25 / SCL 24, address 0x36, "
+     "magnets in place"),
+    ("servos (sweep +-5 deg, encoder confirms)", r"servo sweep",
+     "check servo power and linkage; the encoder must move the way params.yaml sign_x / "
+     "sign_y says"),
+    ("load cell (HX711)", r"HX711",
+     "check the HX711: DOUT pin 6, SCK pin 7, 3.3 V, load-cell leads"),
+    ("IMU axis remap determinant", r"determinant",
+     "the R_B<-S remap in imu.cpp is not a signed permutation; fix it before anything else"),
+]
+
+
+def run_selftest_on(con: Console, r: Results) -> bool:
+    st = query_status(con)
+    if st is None:
+        r.failed("no reply from the Teensy console",
+                 "make sure it runs teensy_flight (./tvc flash teensy) and that nothing else "
+                 "has the port open")
+        return False
+    if st.get("fw"):
+        r.info(f"Teensy firmware {st['fw']}, state {st['state']}")
+    else:
+        r.warn("this firmware predates the fw= field in STATUS and has no radio check",
+               "reflash: ./tvc flash teensy")
+    state = st["state"]
+    if state in LIVE_STATES:
+        r.failed(f"the vehicle is {state}: not running SELFTEST",
+                 "type ABORT in ./tvc monitor teensy first (SELFTEST is IDLE or FAULT only)")
+        return False
+    if state == "SAFE":
+        r.info("state is SAFE: sending RESET to return to IDLE first")
+        con.send("RESET")
+        con.collect(lambda ln: ">> IDLE" in ln, 3.0)
+
+    r.info("SELFTEST sweeps both servos +-5 deg and samples the gyro for 2 s: keep the stand "
+           "still and the linkage clear")
+    con.send("SELFTEST")
+    lines, done = con.collect(
+        lambda ln: "SELFTEST: complete" in ln or "SELFTEST: FAULT" in ln, timeout=90.0)
+    if not done:
+        r.failed("SELFTEST did not finish within 90 s",
+                 "open ./tvc monitor teensy to see where it stopped; an SD card that will "
+                 "not preallocate is the usual cause")
+        return False
+
+    results = [(m.group(1), m.group(2)) for ln in lines if (m := SELFTEST_LINE_RE.match(ln))]
+    missing = [ln.split("MISSING (still MEASURE):")[1].strip() for ln in lines
+               if "MISSING (still MEASURE):" in ln]
+    for label, pattern, nxt in SELFTEST_CHECKS:
+        hit = next(((s, t) for s, t in results if re.search(pattern, t)), None)
+        if hit is None:
+            if label == "radio init" or "determinant" in label:
+                r.failed(f"{label}: the firmware did not report this check",
+                         "reflash the current firmware: ./tvc flash teensy")
+            continue
+        status, text = hit
+        if status == "PASS":
+            detail = f" (logging to {text[6:]})" if text.startswith("SD -> ") else ""
+            r.passed(f"{label}{detail}")
+        elif status == "SKIP":
+            r.failed(f"{label}: not run, an earlier check failed",
+                     "fix the failures above, then run ./tvc selftest again")
+        else:
+            r.failed(f"{label}: {text}", nxt)
+    if missing:
+        r.warn("MEASURE values still unset (these block ARM, not SELFTEST): "
+               + ", ".join(missing),
+               "fill them in params.yaml, then ./tvc flash teensy")
+    return r.ok
+
+
+def cmd_selftest(args) -> int:
+    r = Results()
+    dev = resolve_port(r, "teensy", args.port)
+    if not dev:
+        return 1
+    holders = port_holders(dev)
+    if holders:
+        pid, name, _ = holders[0]
+        r.failed(f"{dev} is busy: held by {name} (pid {pid})",
+                 "close that program (or let ./tvc flash close it), then run this again")
+        return 1
+    try:
+        con = Console(dev)
+    except OSError as exc:
+        r.failed(f"could not open {dev}: {exc}", "unplug and replug the Teensy, then retry")
+        return 1
+    try:
+        ok = run_selftest_on(con, r)
+    finally:
+        con.close()
+    print()
+    print("SELFTEST PASSED" if ok else f"SELFTEST: {r.fails} FAILED")
+    return 0 if ok else 1
+
+
+# ---- link ----------------------------------------------------------------------------------
+
+def measure_link(dev: str, seconds: float, r: Results) -> dict | None:
+    """Receive-only radio test through the Feather. Sends nothing."""
+    import serial
+    sys.path.insert(0, str(REPO / "protocol"))
+    import telem_codec as tc
+
+    params = load_params()
+    telem_hz = float(params["telemetry"]["telem_rate_hz"])
+    status_hz = float(params["telemetry"]["status_rate_hz"])
+    tables = tc.Tables.load(REPO)
+    parser = tc.FrameParser(bridge_trailer=True)
+    try:
+        ser = serial.Serial(dev, 115200, timeout=0.05)
+    except (OSError, serial.SerialException) as exc:
+        r.failed(f"could not open {dev}: {exc}", "close whatever holds it, or ./tvc ports")
+        return None
+
+    counts: Counter = Counter()
+    rssi: list[int] = []
+    snr: list[int] = []
+    overruns: list[int] = []
+    telem_times: list[float] = []
+    t0 = time.time()
+    try:
+        while time.time() - t0 < seconds:
+            for fr in parser.feed(ser.read(512)):
+                now = time.time()
+                try:
+                    kind = tc.PacketType(fr.ptype).name
+                except ValueError:
+                    kind = f"type_{fr.ptype}"
+                counts[kind] += 1
+                if fr.rssi is not None:
+                    rssi.append(fr.rssi)
+                    snr.append(fr.snr)
+                if kind == "TELEM":
+                    telem_times.append(now)
+                if kind == "STATUS":
+                    try:
+                        overruns.append(tc.decode_status(fr.payload, tables)["loop_overrun_count"])
+                    except Exception:  # noqa: BLE001 - a bad payload is counted by CRC anyway
+                        pass
+    finally:
+        ser.close()
+    elapsed = time.time() - t0
+    exp_telem = telem_hz * elapsed
+    got = counts["TELEM"]
+    return {
+        "elapsed": elapsed, "counts": counts, "telem_expected": exp_telem,
+        "status_expected": status_hz * elapsed,
+        "loss_pct": max(0.0, 100.0 * (1.0 - got / exp_telem)) if exp_telem else 100.0,
+        "crc_errors": parser.crc_errors, "rssi": rssi, "snr": snr, "overruns": overruns,
+        "max_gap_ms": max((b - a) * 1000 for a, b in zip(telem_times, telem_times[1:]))
+        if len(telem_times) > 1 else None,
+    }
+
+
+def report_link(res: dict, r: Results, limit_pct: float = 2.0) -> bool:
+    c = res["counts"]
+    el = res["elapsed"]
+    got = c["TELEM"]
+    if got == 0:
+        r.failed(f"no TELEM packets in {el:.0f} s",
+                 "power the vehicle (the Teensy transmits from boot), attach both antennas, "
+                 "and check ./tvc selftest says radio init PASS")
+        return False
+    r.info(f"{got} TELEM ({got / el:.1f}/s), {c['STATUS']} STATUS ({c['STATUS'] / el:.1f}/s), "
+           f"{c['EVENT']} EVENT, {c['ACK']} ACK in {el:.0f} s")
+    loss = res["loss_pct"]
+    if loss < limit_pct:
+        r.passed(f"loss {loss:.1f}% (limit {limit_pct:.0f}%, expected "
+                 f"{res['telem_expected']:.0f} TELEM)")
+    else:
+        r.failed(f"loss {loss:.1f}% (limit {limit_pct:.0f}%)",
+                 "move the antennas apart from metal and cables, keep line of sight, and "
+                 "retest at the real stand distance; if loss stays high see BRINGUP.md")
+    if res["crc_errors"]:
+        r.warn(f"{res['crc_errors']} frames failed CRC and were dropped",
+               "interference or a weak signal: check RSSI below and antenna placement")
+    else:
+        r.passed("0 CRC errors")
+    if res["rssi"]:
+        n = len(res["rssi"])
+        r.info(f"RSSI mean {sum(res['rssi']) / n:.0f} dBm (min {min(res['rssi'])}, "
+               f"max {max(res['rssi'])}), SNR mean {sum(res['snr']) / n:.1f} dB")
+    if res["max_gap_ms"] is not None:
+        r.info(f"longest gap between TELEM packets: {res['max_gap_ms']:.0f} ms")
+    if len(res["overruns"]) >= 2 and res["overruns"][-1] > res["overruns"][0]:
+        r.warn(f"the vehicle's loop-overrun count rose by "
+               f"{res['overruns'][-1] - res['overruns'][0]} during the test",
+               "radio transmit blocks the flight loop (see BRINGUP.md, known gaps)")
+    return r.ok
+
+
+def cmd_link(args) -> int:
+    r = Results()
+    dev = resolve_port(r, "feather", args.port)
+    if not dev:
+        return 1
+    holders = port_holders(dev)
+    if holders:
+        pid, name, _ = holders[0]
+        r.failed(f"{dev} is busy: held by {name} (pid {pid})",
+                 "close that program (the ground station holds the port too), then retry")
+        return 1
+    r.info(f"listening on {dev} for {args.seconds:.0f} s; this sends nothing")
+    res = measure_link(dev, args.seconds, r)
+    if res is None:
+        return 1
+    ok = report_link(res, r)
+    print()
+    print("LINK PASSED" if ok else "LINK FAILED")
+    return 0 if ok else 1
+
+
+# ---- uplink ACK round trip (used by ready) -----------------------------------------------------
+
+def ack_roundtrip(dev: str) -> tuple[bool, str, str]:
+    """Send ARM then ABORT then DISARM through the Feather and look for ACKs.
+
+    Returns (ok, message, next). ARM is only sent while the vehicle reports its arm switch
+    OPEN, so the vehicle must refuse it; an ACK carrying that refusal is the proof of the
+    round trip, and nothing can arm.
+    """
+    import serial
+    sys.path.insert(0, str(REPO / "protocol"))
+    import telem_codec as tc
+
+    tables = tc.Tables.load(REPO)
+    parser = tc.FrameParser(bridge_trailer=True)
+    try:
+        ser = serial.Serial(dev, 115200, timeout=0.05)
+    except (OSError, serial.SerialException) as exc:
+        return False, f"could not open {dev}: {exc}", "close whatever holds it"
+
+    def pump(until, timeout):
+        end = time.time() + timeout
+        while time.time() < end:
+            for fr in parser.feed(ser.read(512)):
+                if until(fr):
+                    return fr
+        return None
+
+    try:
+        telem = pump(lambda fr: fr.ptype == tc.PacketType.TELEM, 4.0)
+        if telem is None:
+            return False, "no downlink: no TELEM in 4 s", \
+                "run ./tvc link first; the ACK test needs a working downlink"
+        flags = tc.decode_telem(telem.payload)["flags"]
+        if flags & tc.FLAG_ARM_SWITCH_CLOSED:
+            return False, "the arm switch is closed, so the ARM test is not run", \
+                "open the physical arm switch, then run ./tvc ready again (the test sends ARM)"
+
+        seq = int(time.time()) & 0x7FFF
+
+        def send(ptype, value=None):
+            nonlocal seq
+            seq = (seq + 1) & 0xFFFF
+            ser.write(tc.encode_frame(ptype, tc.encode_uplink(ptype, seq, value)))
+            ser.flush()
+            return seq
+
+        def ack_for(s):
+            def match(fr):
+                if fr.ptype != tc.PacketType.ACK:
+                    return False
+                return tc.decode_ack(fr.payload)["seq"] == s
+            fr = pump(match, 2.5)
+            return tc.decode_ack(fr.payload) if fr else None
+
+        arm = ack_for(send(tc.PacketType.ARM))
+        abort = ack_for(send(tc.PacketType.ABORT))
+        send(tc.PacketType.DISARM)  # SAFE -> IDLE again, so the bench is left as found
+        if arm is None or abort is None:
+            missing = " and ".join(n for n, a in (("ARM", arm), ("ABORT", abort)) if a is None)
+            return False, f"no ACK for {missing} within 2.5 s", \
+                ("the vehicle firmware does not dispatch ARM/ABORT from radio yet (it only "
+                 "tracks HEARTBEAT, SPEC.md 4.7); it needs radio uplink dispatch in "
+                 "sequencer.cpp")
+        if arm["result"] == 0:
+            return False, "the vehicle ACCEPTED ARM with the arm switch reported open", \
+                "stop: the arm-switch sense and the ARM path disagree; check ARM_SENSE_PIN 15"
+        if abort["result"] != 0:
+            return False, f"ABORT was ACKed but with result {abort['result_name']}", \
+                "ABORT must always succeed: read radio uplink handling in sequencer.cpp"
+        return True, (f"ARM ACKed ({arm['result_name']}), ABORT ACKed (OK)"), ""
+    finally:
+        ser.close()
+
+
+# ---- gs ----------------------------------------------------------------------------------------
+
+def cmd_gs(args) -> int:
+    r = Results()
+    if not generate(r):
+        return 1
+    cmd = [str(VENV_PY if VENV_PY.exists() else sys.executable), str(REPO / "ground" / "gs.py")]
+    if args.replay:
+        f = Path(args.replay)
+        if not f.is_absolute():
+            f = REPO / f
+        if not f.exists():
+            r.failed(f"{args.replay} does not exist",
+                     "make a synthetic log with `ground/venv/bin/python "
+                     "tools/synth_sd_log.py` (writes data/synthetic/SF_SYNTH.BIN), or give a "
+                     "real SF_*.BIN")
+            return 1
+        cmd += ["--replay", str(f)]
+    elif args.live:
+        dev = resolve_port(r, "feather", args.port)
+        if not dev:
+            return 1
+        cmd += ["--port", dev]
+    else:
+        cmd += ["--sim"]
+    print("starting the ground station: " + " ".join(Path(c).name if i < 2 else c
+                                                   for i, c in enumerate(cmd)))
+    sys.stdout.flush()
+    os.chdir(REPO)
+    os.execv(cmd[0], cmd)
+
+
+# ---- ready ---------------------------------------------------------------------------------
+
+def stand_open_required() -> list[str]:
+    """Dotted names of the MEASURE params sequencer.cpp's measureGateOk() makes ARM wait for."""
+    src = (REPO / "firmware" / "src" / "flight" / "sequencer.cpp").read_text()
+    start = src.find("bool measureGateOk")
+    end = src.find("return ok;", start)
+    return re.findall(r'\{"([a-z0-9_.]+)",\s*params::', src[start:end])
+
+
+def measure_values() -> dict[str, bool]:
+    """dotted name -> still MEASURE, for every param in params.yaml."""
+    out: dict[str, bool] = {}
+    for section, body in load_params().items():
+        if isinstance(body, dict):
+            for k, v in body.items():
+                out[f"{section}.{k}"] = (v == "MEASURE")
+    return out
+
+
+def cmd_ready(args) -> int:
+    gates: list[tuple[str, str, str | None]] = []
+
+    def gate(color: str, msg: str, nxt: str | None = None):
+        gates.append((color, msg, nxt))
+        print(f"{_tag(color)} {msg}")
+        if nxt:
+            print(f"       next: {nxt}")
+        sys.stdout.flush()
+
+    print("Checking the pre-fire gates. This runs the test suite and a radio test, so "
+          "it takes a few minutes.\n")
+
+    # 1. tests
+    tr = Results(quiet=True)
+    if run_tests(tr):
+        gate("GREEN", "tests: native, parity, codec and GUI offscreen tests all pass")
+    else:
+        first = next((m for k, m, _ in tr.lines if k == "FAIL"), "a test step failed")
+        gate("RED", f"tests: {first}", "./tvc test shows the full output")
+
+    # 2. boards on the current hash, 3. SELFTEST
+    probe = Results(quiet=True)
+    teensy_dev = resolve_port(probe, "teensy", args.teensy_port)
+    st = None
+    if teensy_dev:
+        holders = port_holders(teensy_dev)
+        if holders:
+            gate("RED", f"Teensy port {teensy_dev} is busy: held by {holders[0][1]}",
+                 "close that program, then run ./tvc ready again")
+        else:
+            try:
+                con = Console(teensy_dev)
+                st = query_status(con)
+                con.close()
+            except OSError:
+                st = None
+    head = git_head()
+    teensy_msg, teensy_ok = "Teensy not detected", False
+    if st and st.get("fw"):
+        teensy_ok, why = hash_is_current(st["fw"])
+        teensy_msg = f"Teensy firmware {why}"
+    elif st:
+        teensy_msg = "Teensy firmware predates the fw= field"
+    elif teensy_dev:
+        teensy_msg = "Teensy did not answer STATUS"
+
+    fprobe = Results(quiet=True)
+    feather_dev = resolve_port(fprobe, "feather", args.feather_port)
+    stamp = load_state().get("feather")
+    feather_ok, feather_msg = False, "Feather not detected: try double-tap reset"
+    if feather_dev and stamp:
+        feather_ok, why = hash_is_current(stamp["hash"])
+        feather_msg = f"Feather bridge {why} (from the upload stamp)"
+    elif feather_dev:
+        feather_msg = "Feather present but there is no upload stamp: flash it with this tool"
+
+    if teensy_ok and feather_ok:
+        gate("GREEN", f"both boards on current firmware (HEAD {head})")
+    else:
+        parts = []
+        if not teensy_ok:
+            parts.append(teensy_msg)
+        if not feather_ok:
+            parts.append(feather_msg)
+        gate("RED", "boards on current hash: " + "; ".join(parts),
+             "./tvc flash all" if (teensy_dev and feather_dev) else "./tvc ports")
+
+    if st is not None:
+        hard = st["faults"] & ~(1 << 0) & ~(1 << 7)  # MEASURE_MISSING and LOOP_OVERRUN
+        if st["state"] in ("IDLE", "ARMED") and hard == 0:
+            gate("GREEN", f"SELFTEST: Teensy is {st['state']} with no hard fault bits "
+                          f"(fault_bits 0x{st['faults']:04X})")
+        else:
+            gate("RED", f"SELFTEST: Teensy is {st['state']}, fault_bits 0x{st['faults']:04X}",
+                 "./tvc selftest shows which check failed")
+    else:
+        gate("RED", "SELFTEST: no Teensy status to read", "./tvc ports, then ./tvc selftest")
+
+    # 4. radio link
+    link_ok = False
+    if feather_dev:
+        if port_holders(feather_dev):
+            gate("RED", f"radio link: {feather_dev} is busy",
+                 "close the ground station, then run ./tvc ready again")
+        else:
+            lr = Results(quiet=True)
+            print(f"       (running the {args.link_seconds:.0f} s radio test...)")
+            res = measure_link(feather_dev, args.link_seconds, lr)
+            if res is not None and report_link(res, lr):
+                link_ok = True
+                gate("GREEN", f"radio link: loss {res['loss_pct']:.1f}%, "
+                              f"{res['counts']['TELEM']} TELEM in {res['elapsed']:.0f} s")
+            else:
+                why = next((m for k, m, _ in lr.lines if k == "FAIL"), "link test failed")
+                gate("RED", f"radio link: {why}", "./tvc link shows the full report")
+    else:
+        gate("RED", "radio link: Feather not detected: try double-tap reset", "./tvc ports")
+
+    # 5. uplink ARM / ABORT ACK round trip
+    if feather_dev and link_ok:
+        ok, msg, nxt = ack_roundtrip(feather_dev)
+        gate("GREEN" if ok else "RED", f"uplink ARM/ABORT ACK round trip: {msg}",
+             None if ok else nxt)
+    else:
+        gate("RED", "uplink ARM/ABORT ACK round trip: not tried, the radio link gate is not green",
+             "fix the radio link first")
+
+    # 6. MEASURE values blocking ARM
+    required = stand_open_required()
+    values = measure_values()
+    blocking = [n for n in required if values.get(n, True)]
+    others = sorted(n for n, m in values.items() if m and n not in required)
+    if blocking:
+        gate("RED", "MEASURE values still blocking ARM: " + ", ".join(blocking),
+             "measure them (BRINGUP.md section 'MEASURE values'), put them in params.yaml, "
+             "then ./tvc flash teensy")
+    else:
+        gate("GREEN", "no MEASURE value blocks ARM in STAND_OPEN")
+    if others:
+        print("       also still MEASURE, not needed for STAND_OPEN: " + ", ".join(others))
+
+    # 7. DRY_RUN reaches SAFE (manual)
+    gate("MANUAL", "DRY_RUN reaches SAFE: with the LED and 1 kOhm in place of the igniter, run "
+                   "the dry-run sequence (BRINGUP.md step 9) and confirm the LED pulses once "
+                   "and the state ends at SAFE")
+
+    # permanent
+    gate("RED", PERMANENT_RED)
+
+    reds = sum(1 for c, _, _ in gates if c == "RED")
+    manual = sum(1 for c, _, _ in gates if c == "MANUAL")
+    print()
+    if reds == 0 and manual == 0:
+        print("READY")
+        return 0
+    print(f"NOT READY: {reds} RED, {manual} MANUAL")
+    return 1
+
+
+# ---- main --------------------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="tvc", description=__doc__.split("\n\n")[0],
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("ports", help="list the Teensy and the Feather by name")
+    sub.add_parser("test", help="native tests, parity, codec tests, GUI offscreen tests")
+
+    f = sub.add_parser("flash", help="build + upload, then check what the board reports")
+    f.add_argument("target", choices=["teensy", "feather", "all"])
+    f.add_argument("--port", help="serial device (single-board flash only)")
+
+    m = sub.add_parser("monitor", help="watch a board")
+    m.add_argument("target", choices=["teensy", "feather"])
+    m.add_argument("--port")
+
+    s = sub.add_parser("selftest", help="run SELFTEST on the Teensy over USB")
+    s.add_argument("--port")
+
+    lk = sub.add_parser("link", help="receive-only radio test through the Feather")
+    lk.add_argument("--port")
+    lk.add_argument("--seconds", type=float, default=60.0)
+
+    g = sub.add_parser("gs", help="launch the ground station")
+    grp = g.add_mutually_exclusive_group()
+    grp.add_argument("--sim", action="store_true", help="virtual vehicle (default)")
+    grp.add_argument("--replay", metavar="FILE", help="replay an SD log or ground log")
+    grp.add_argument("--live", action="store_true", help="through the Feather bridge")
+    g.add_argument("--port", help="--live: Feather serial device")
+
+    rd = sub.add_parser("ready", help="pre-fire checklist: GREEN / RED / MANUAL")
+    rd.add_argument("--teensy-port")
+    rd.add_argument("--feather-port")
+    rd.add_argument("--link-seconds", type=float, default=60.0)
+    return p
+
+
+def main() -> int:
+    ensure_venv()
+    args = build_parser().parse_args()
+    os.chdir(REPO)
+    handlers = {"ports": cmd_ports, "test": cmd_test, "flash": cmd_flash,
+                "monitor": cmd_monitor, "selftest": cmd_selftest, "link": cmd_link,
+                "gs": cmd_gs, "ready": cmd_ready}
+    try:
+        return handlers[args.cmd](args)
+    except KeyboardInterrupt:
+        print("\ninterrupted")
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
