@@ -6,6 +6,7 @@
 #include "encoders.h"
 #include "git_hash.h"
 #include "imu.h"
+#include "lora_link.h"
 #include "loadcell.h"
 #include "logging_flash.h"
 #include "logging_sd.h"
@@ -19,8 +20,7 @@
 namespace tvc::flight::telemetry {
 namespace {
 
-constexpr uint32_t kTelemPeriodMs = 1000u / params::telemetry::telem_rate_hz;
-constexpr uint32_t kStatusPeriodMs = 1000u / params::telemetry::status_rate_hz;
+namespace lora = protocol::lora;
 constexpr int kMaxPendingEvents = 9;  // 3 copies per EVENT, so up to 3 EVENTs overlapping
 
 // ---- latest control-tick snapshot (150 Hz), read by the next 10 Hz TELEM send ----
@@ -34,7 +34,9 @@ float g_peak_tilt_p = 0, g_peak_tilt_y = 0;
 uint32_t g_control_ticks = 0, g_sat_ticks_p = 0, g_sat_ticks_y = 0;
 
 // Which frame starts on which tick, and the skipped-TELEM count (tx_slots.h has the rules).
-TxSlots g_slots(kTelemPeriodMs, kStatusPeriodMs);
+// STATUS and EVENT go in the gap after a TELEM frame; the sizes come from the airtime numbers.
+TxSlots g_slots(TxPlan{lora::kTelemPeriodMs, lora::kStatusEveryNTelem, lora::kStatusOffsetMs,
+                       lora::kStatusCostMs, lora::kEventCostMs});
 
 struct PendingEvent {
     uint32_t due_ms;
@@ -253,7 +255,8 @@ void onEvent(uint8_t event_code, int16_t aux) {
             scheduled++;
         }
     }
-    servicePendingEvents(now);  // the first copy goes out here if the radio is idle
+    // Nothing is sent from here: onLoopTick() starts the first copy on the next tick that has a
+    // gap before the next TELEM slot, so an EVENT never sits across one.
 }
 
 uint32_t txSkipped() { return g_slots.telemSkipped(); }

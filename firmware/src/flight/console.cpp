@@ -32,8 +32,8 @@ void printHelp() {
         " ABORT               abort to SAFE from any state\n"
         " RESET               SAFE -> IDLE\n"
         " DUMP_FLASH          hex-dump the LittleFS mirror over serial\n"
-        " STATUS / ?          one-line status (loop_us_max, tx_skipped, tx_timeouts at the end)\n"
-        " CLEARSTATS          zero loop_us_max, tx_skipped and tx_timeouts; any state\n"
+        " STATUS / ?          one-line status; loop timing and TX counters are at the end\n"
+        " CLEARSTATS          zero the loop timing, tx_skipped and tx_timeouts; any state\n"
         " HELP / H            this text\n"));
 }
 

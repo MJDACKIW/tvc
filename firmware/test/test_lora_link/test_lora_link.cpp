@@ -78,6 +78,23 @@ void test_current_params_leave_the_channel_some_room(void) {
     TEST_ASSERT_TRUE(kDownlinkDutyPermille < 1000);
 }
 
+// STATUS rides on the TELEM grid (tx_slots.h): at the configured settings it must start after
+// the TELEM frame and finish inside the period. Also pins the numbers the scheduler is built
+// from at 500 kHz, the same ones tools/lora_airtime.py prints.
+void test_schedule_constants_at_500_khz(void) {
+    constexpr uint32_t telem = timeOnAirUs(37, 7, 500000, 5);
+    constexpr uint32_t status = timeOnAirUs(52, 7, 500000, 5);
+    TEST_ASSERT_EQUAL_UINT32(20544, telem);
+    TEST_ASSERT_EQUAL_UINT32(25664, status);
+    TEST_ASSERT_EQUAL_UINT32(22, ceilMs(kTxStartCostUs + telem));       // STATUS offset
+    TEST_ASSERT_EQUAL_UINT32(28, ceilMs(kTxStartCostUs + status) + 1);  // STATUS cost
+}
+
+void test_status_fits_in_the_gap_at_the_configured_settings(void) {
+    TEST_ASSERT_TRUE(kStatusOffsetMs + kStatusCostMs < kTelemPeriodMs);
+    TEST_ASSERT_EQUAL_UINT32(10, kStatusEveryNTelem);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
     RUN_TEST(test_hand_checked_airtimes);
@@ -86,5 +103,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_wider_bandwidth_never_takes_longer);
     RUN_TEST(test_frame_airtime_includes_the_radiohead_header);
     RUN_TEST(test_current_params_leave_the_channel_some_room);
+    RUN_TEST(test_schedule_constants_at_500_khz);
+    RUN_TEST(test_status_fits_in_the_gap_at_the_configured_settings);
     return UNITY_END();
 }

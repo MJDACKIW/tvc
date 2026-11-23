@@ -13,6 +13,7 @@
 #include "logging_flash.h"
 #include "logging_sd.h"
 #include "lora_link.h"
+#include "loop_stats.h"
 #include "params.h"
 #include "pins.h"
 #include "profiles.h"
@@ -51,7 +52,7 @@ uint16_t g_fire_token = 0;
 bool g_fire_confirmed = false;
 
 uint32_t g_loop_overrun_count = 0;
-uint32_t g_loop_us_max = 0;  // largest tick period seen (the loop_us the Record logs), us
+LoopStats g_loop_stats;  // execution time, period and backlog of each tick (loop_stats.h)
 uint32_t g_tick_count = 0;  // for the 300 Hz / 150 Hz split
 
 float g_ol_pitch_delta = 0.0f, g_ol_yaw_delta = 0.0f;  // open-loop actuator state (applied)
@@ -369,8 +370,11 @@ void begin() {
 }
 
 void tick(uint32_t loop_us) {
-    if (loop_us > g_loop_us_max) g_loop_us_max = loop_us;
-    if (loop_us > 3300) {
+    const uint32_t tick_start_us = micros();
+
+    // Unchanged rule, see loop_stats.h and BRINGUP.md: loop_us is the time since this tick's
+    // scheduled start, so every tick the scheduler starts passes this test.
+    if (countsAsOverrun(loop_us)) {
         g_fault_bits |= fault_bits::kLoopOverrun;
         g_loop_overrun_count++;
     }
@@ -517,6 +521,9 @@ void tick(uint32_t loop_us) {
 
     buildAndLogRecord(loop_us);
     telemetry::onLoopTick();
+
+    constexpr uint32_t kTickUs = protocol::lora::kLoopTickUs;
+    g_loop_stats.record(tick_start_us, micros(), loop_us > kTickUs ? loop_us - kTickUs : 0);
 }
 
 // ---- console-invoked commands --------------------------------------------------------
@@ -595,12 +602,11 @@ bool dryRun() { return g_dry_run; }
 bool armSwitchClosed() { return digitalReadFast(pins::kArmSense) == LOW; }
 uint16_t faultBits() { return g_fault_bits; }
 uint32_t loopOverrunCount() { return g_loop_overrun_count; }
-uint32_t loopUsMax() { return g_loop_us_max; }
 
 void cmdClearStats() {
-    g_loop_us_max = 0;
+    g_loop_stats.reset();
     telemetry::clearStats();
-    Serial.println(F("stats cleared: loop_us_max, tx_skipped, tx_timeouts (overruns keep counting)"));
+    Serial.println(F("stats cleared: loop timing, tx_skipped, tx_timeouts (overruns keep counting)"));
 }
 
 int32_t telemetryTMs() {
@@ -624,12 +630,22 @@ void printStatus() {
     Serial.printf(
         "[%s] mode=STAND_OPEN profile=%s dry_run=%d thrust=%.2fN enc=(%.2f,%.2f)deg "
         "arm_sw=%s cont=%s fault_bits=0x%04X overruns=%lu fw=%s "
-        "loop_us_max=%lu tx_skipped=%lu tx_timeouts=%lu\n",
+        "ticks=%lu exec_us_max=%lu period_us_max=%lu behind_us_max=%lu "
+        "exec_hist=%lu,%lu,%lu,%lu,%lu,%lu tx_skipped=%lu tx_timeouts=%lu\n",
         stateName(g_state), profileName(g_profile), g_dry_run, loadcell::thrustN(),
         encoders::pitchDeg(), encoders::yawDeg(), armSwitchClosed() ? "CLOSED" : "open",
         continuityOk() ? "OK" : "OPEN", g_fault_bits,
         static_cast<unsigned long>(g_loop_overrun_count), kFirmwareGitHash,
-        static_cast<unsigned long>(g_loop_us_max),
+        static_cast<unsigned long>(g_loop_stats.ticks()),
+        static_cast<unsigned long>(g_loop_stats.execMaxUs()),
+        static_cast<unsigned long>(g_loop_stats.periodMaxUs()),
+        static_cast<unsigned long>(g_loop_stats.behindMaxUs()),
+        static_cast<unsigned long>(g_loop_stats.hist(0)),
+        static_cast<unsigned long>(g_loop_stats.hist(1)),
+        static_cast<unsigned long>(g_loop_stats.hist(2)),
+        static_cast<unsigned long>(g_loop_stats.hist(3)),
+        static_cast<unsigned long>(g_loop_stats.hist(4)),
+        static_cast<unsigned long>(g_loop_stats.hist(5)),
         static_cast<unsigned long>(telemetry::txSkipped()),
         static_cast<unsigned long>(telemetry::txTimeouts()));
 }

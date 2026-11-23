@@ -142,7 +142,7 @@ telemetry:
   rate_hz: 20
   lora_freq_mhz: 915.0
   lora_sf: 7
-  lora_bw_khz: 250        # 125 until the first bench link test (Section 4.7, airtime)
+  lora_bw_khz: 500        # 125, then 250, now 500 (Section 4.7, airtime); 250 is the fallback
   lora_cr: 5
   tx_power_dbm: 13
 logging:
@@ -238,7 +238,10 @@ the GUI has a checkbox that disables the `burnout` detector so the sequence comp
 if ready (it is ~80 SPS; use the last value), read both AS5600 encoders, evaluate state machine,
 write SD record. Every 2nd tick (150 Hz exactly): `controller_step` on both axes and servo
 write. Telemetry at 20 Hz from a separate `elapsedMicros`. Measure and log loop overrun count;
-a `STATUS.fault_bits` bit is set if any tick exceeds 3.3 ms.
+a `STATUS.fault_bits` bit is set if any tick exceeds 3.3 ms. The console `STATUS` line also
+carries each tick's execution time and period maxima, a histogram of execution time, and the
+ticks counted (`firmware/src/flight/loop_stats.h`). What the overrun counter really counts, and
+a proposed fix, are in BRINGUP.md ("What loop_overrun_count counts").
 
 ### 4.3 Test-stand / flight sequencer
 ```
@@ -349,20 +352,36 @@ one LoRa frame with margin. 20 Hz × ~60 B ≈ 9.6 kbps is **too much** for the 
 downlink is 10 Hz `TELEM` + 1 Hz `STATUS` rather than one packet at 20 Hz. Full rate stays on
 SD (Section 4.6).
 
-**Airtime.** The link runs SF7, CR 4/5, **BW250** (it was BW125; the first bench link test at
-125 kHz lost a third of the TELEM frames). RadioHead adds 4 header bytes, so a 33 B TELEM frame
-is 37 B on the air and a 48 B STATUS frame is 52 B. Time on air is 82.2 ms and 102.7 ms at
-BW125 (10 Hz + 1 Hz is 92.4% of every second) and **41.1 ms and 51.3 ms at BW250 (46.2%)**.
-`tools/lora_airtime.py` prints the table from `params.yaml`; `--bw 500` shows the next step
-(23.1%) without changing anything. EVENT (3 copies each), ACK and the 2 Hz HEARTBEAT uplink
-share the channel on top of that, so the working limit is 50% for TELEM + STATUS.
+**Airtime.** The link runs SF7, CR 4/5, **BW500**. It was BW125, then BW250; 250 kHz stays
+documented as the fallback if 500 kHz costs too much range. RadioHead adds 4 header bytes, so a
+33 B TELEM frame is 37 B on the air and a 48 B STATUS frame is 52 B. 10 Hz TELEM + 1 Hz STATUS:
+
+| bandwidth | TELEM | STATUS | duty |
+|---|---|---|---|
+| 125 kHz (first bench test: not sustainable) | 82.2 ms | 102.7 ms | 92.4% |
+| 250 kHz (fallback) | 41.1 ms | 51.3 ms | 46.2% |
+| **500 kHz (now)** | **20.5 ms** | **25.7 ms** | **23.1%** |
+
+`tools/lora_airtime.py` prints the table from `params.yaml` and takes `--bw` for what-ifs. EVENT
+(3 copies each), ACK and the 2 Hz HEARTBEAT uplink share the channel on top of that, so the
+working limit is 50% for TELEM + STATUS. Each doubling of bandwidth costs about 3 dB of
+sensitivity: check RSSI/SNR with `./tvc link` at the real stand distance.
+
+**Where each frame goes in time.** TELEM owns a fixed 100 ms grid. STATUS rides on every 10th
+TELEM slot at a phase offset (about 22 ms at BW500: once a TELEM that started on time has
+finished), so it starts in the gap after a TELEM frame instead of in the same millisecond as
+the next one. STATUS and EVENT copies start only when the radio is free and the frame will have
+left the air before the next TELEM slot; otherwise they wait for the next gap, and a STATUS held
+more than half a second goes out anyway at the cost of one TELEM. `firmware/src/flight/tx_slots.h`
+holds the rule and `firmware/test/test_tx_slots` checks it against a simulated radio at every
+phase of the 300 Hz ticks against the grid, at BW500 and BW250, and with slow ticks.
 
 **Transmit never blocks the flight loop.** `radio::send()` starts the transmitter and returns;
 the TX-done interrupt ends it; `radio::busy()` is polled each tick and clears a transmission
 whose interrupt never came (2x airtime + 10 ms). A TELEM that falls due while a frame is still
 on the air is skipped and counted (`tx_skipped` on the USB console), never queued. STATUS and
-EVENT copies that find the radio busy stay due and go out on the first free tick, so STATUS is
-not starved by the TELEM that falls due in the same millisecond every whole second.
+EVENT copies that find the radio busy, or that would not finish before the next TELEM slot,
+stay due and go out in the next gap (see above).
 
 **TELEM (10 Hz, 27-byte payload).** Every field int16/uint16 unless noted:
 ```

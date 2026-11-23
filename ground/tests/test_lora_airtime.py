@@ -103,3 +103,15 @@ def test_budget_at_the_bandwidths_that_matter():
     assert la.duty_at(7, 125, 5, 10, 1) == pytest.approx(92.4, abs=0.05)
     assert la.duty_at(7, 250, 5, 10, 1) == pytest.approx(46.2, abs=0.05)
     assert la.duty_at(7, 500, 5, 10, 1) == pytest.approx(23.1, abs=0.05)
+
+
+def test_gap_after_telem_at_each_bandwidth():
+    # what is left of the 100 ms TELEM period after the TELEM frame, and what STATUS needs of it
+    b500 = la.budget(7, 500, 5, 10, 1)
+    assert b500["gap_us"] == pytest.approx(79_456, abs=1)
+    assert b500["status_needs_us"] == 26_164
+    b250 = la.budget(7, 250, 5, 10, 1)
+    assert b250["gap_us"] == pytest.approx(58_912, abs=1)
+    assert b250["status_needs_us"] == 51_828
+    b125 = la.budget(7, 125, 5, 10, 1)
+    assert b125["gap_us"] < b125["status_needs_us"]  # STATUS cannot fit at BW125

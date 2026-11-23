@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO / "protocol"))
 RADIOHEAD_HEADER_BYTES = 4   # protocol/lora_link.h kRadioHeadHeaderBytes
 PREAMBLE_SYMBOLS = 8         # protocol/lora_link.h kPreambleSymbols
 DUTY_LIMIT_PCT = 50.0        # above this the link has no room for EVENT, ACK and HEARTBEAT
+TX_START_COST_US = 500       # FIFO load before the transmitter starts (protocol/lora_link.h)
 
 
 def time_on_air_us(phy_bytes: int, sf: int, bw_hz: int, cr_denominator: int,
@@ -70,8 +71,12 @@ def budget(sf: int, bw_khz: int, cr: int, telem_hz: float, status_hz: float) -> 
         }
     rate = {"TELEM": telem_hz, "STATUS": status_hz}
     busy_us_per_s = sum(rate[n] * rows[n]["air_us"] for n in rows)
+    period_us = 1_000_000 / telem_hz if telem_hz else float("inf")
     return {"rows": rows, "rate": rate, "duty_pct": busy_us_per_s / 10_000.0,
-            "sf": sf, "bw_khz": bw_khz, "cr": cr}
+            "sf": sf, "bw_khz": bw_khz, "cr": cr,
+            # time left in a TELEM period after the TELEM frame, and what a STATUS needs of it
+            "gap_us": period_us - rows["TELEM"]["air_us"],
+            "status_needs_us": rows["STATUS"]["air_us"] + TX_START_COST_US}
 
 
 def duty_at(sf: int, bw_khz: int, cr: int, telem_hz: float, status_hz: float) -> float:
@@ -89,6 +94,11 @@ def format_report(b: dict) -> list[str]:
                    f"{b['rate'][name]:>5.0f} Hz")
     out.append(f"  downlink duty cycle: {b['duty_pct']:.1f}% "
                f"({b['rate']['TELEM']:.0f} Hz TELEM + {b['rate']['STATUS']:.0f} Hz STATUS)")
+    out.append(f"  gap after each TELEM: {b['gap_us'] / 1000:.1f} ms; a STATUS needs "
+               f"{b['status_needs_us'] / 1000:.1f} ms of it, so it "
+               + ("fits with room to spare" if b["gap_us"] >= 1.5 * b["status_needs_us"]
+                  else "fits with little room" if b["gap_us"] >= b["status_needs_us"]
+                  else "does NOT fit and TELEM frames will be skipped"))
     out.append("  'on air' includes RadioHead's 4 header bytes; EVENT (3 copies each), ACK and "
                "the 2 Hz HEARTBEAT uplink share the channel on top of this.")
     return out

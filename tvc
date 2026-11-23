@@ -341,7 +341,9 @@ STATUS_RE = re.compile(
     r"thrust=(?P<thrust>\S+)N enc=\((?P<ep>\S+),(?P<ey>\S+)\)deg arm_sw=(?P<arm>\S+) "
     r"cont=(?P<cont>\S+) fault_bits=0x(?P<faults>[0-9A-Fa-f]+) overruns=(?P<overruns>\d+)"
     r"(?: fw=(?P<fw>\S+))?"
-    r"(?: loop_us_max=(?P<loop_us_max>\d+) tx_skipped=(?P<tx_skipped>\d+) "
+    r"(?: ticks=(?P<ticks>\d+) exec_us_max=(?P<exec_us_max>\d+) "
+    r"period_us_max=(?P<period_us_max>\d+) behind_us_max=(?P<behind_us_max>\d+) "
+    r"exec_hist=(?P<exec_hist>\d+(?:,\d+){5}) tx_skipped=(?P<tx_skipped>\d+) "
     r"tx_timeouts=(?P<tx_timeouts>\d+))?")
 BANNER_FW_RE = re.compile(r"firmware ready\. fw=(\S+)")
 
@@ -358,9 +360,12 @@ def query_status(con: Console, timeout: float = 3.0, tries: int = 3) -> dict | N
                 d = m.groupdict()
                 d["faults"] = int(d["faults"], 16)
                 d["overruns"] = int(d["overruns"])
-                for key in ("loop_us_max", "tx_skipped", "tx_timeouts"):
+                for key in ("ticks", "exec_us_max", "period_us_max", "behind_us_max",
+                            "tx_skipped", "tx_timeouts"):
                     if d.get(key) is not None:
                         d[key] = int(d[key])
+                if d.get("exec_hist") is not None:
+                    d["exec_hist"] = [int(x) for x in d["exec_hist"].split(",")]
                 return d
     return None
 
@@ -861,7 +866,9 @@ def measure_link(dev: str, seconds: float, r: Results) -> dict | None:
 
 
 NOMINAL_TICK_US = 3333      # 300 Hz loop; params.yaml control.loop_hz
-LOOP_STALL_WARN_US = 10_000  # three missed ticks; a TX that blocks shows up as its whole airtime
+LOOP_HZ = 300
+# Upper edges of the firmware's execution-time histogram bins (loop_stats.h kEdgesUs), in us.
+EXEC_BIN_LABELS = ["<0.5 ms", "0.5-1 ms", "1-2 ms", "2-3.3 ms", "3.3-10 ms", ">=10 ms"]
 
 
 def open_vehicle_console(r: Results, override: str | None) -> "Console | None":
@@ -915,42 +922,59 @@ def report_airtime_budget(r: Results) -> None:
         r.info(msg)
 
 
-def report_vehicle(vehicle: dict, res: dict, r: Results) -> None:
-    """Loop timing and TX counters the Teensy reported over USB after the test window."""
-    if vehicle.get("loop_us_max") is None:
-        r.warn("this firmware does not report loop_us_max / tx_skipped",
+def report_vehicle(vehicle: dict, res: dict, r: Results, window_s: float | None = None) -> None:
+    """Loop timing and TX counters the Teensy reported over USB after the test window.
+
+    window_s is the time between CLEARSTATS and the final STATUS, so ticks / window_s is the
+    rate the 300 Hz loop actually ran at."""
+    if vehicle.get("exec_us_max") is None:
+        r.warn("this firmware does not report loop timing or tx_skipped",
                "reflash: ./tvc flash teensy")
         return
-    peak = vehicle["loop_us_max"]
-    line = (f"vehicle loop: longest tick period {peak} us (nominal {NOMINAL_TICK_US} us), "
-            f"{vehicle['tx_skipped']} TELEM skipped while a frame was on the air, "
-            f"{vehicle['tx_timeouts']} stuck TX cleared")
-    if peak > LOOP_STALL_WARN_US:
-        sys.path.insert(0, str(REPO / "tools"))
-        import lora_airtime as la
-        s = la.load_settings()
-        telem_ms = la.budget(s["sf"], s["bw_khz"], s["cr"], s["telem_hz"],
-                             s["status_hz"])["rows"]["TELEM"]["air_us"] / 1000
-        r.warn(line, f"something held the flight loop for {peak / 1000:.0f} ms. One TELEM "
-               f"frame is {telem_ms:.0f} ms on air: if the stall is about that long the board "
-               "still runs the old blocking radio code (./tvc flash teensy); otherwise look at "
-               "SD writes (logging_sd.cpp), or a SELFTEST run inside the window")
-    else:
-        r.info(line)
+    ticks = vehicle["ticks"]
+    hist = vehicle["exec_hist"]
+    exec_max, period_max, behind_max = (vehicle["exec_us_max"], vehicle["period_us_max"],
+                                        vehicle["behind_us_max"])
+    r.info(f"vehicle tick execution time: max {exec_max} us (budget {NOMINAL_TICK_US} us); "
+           f"tick period: max {period_max} us (nominal {NOMINAL_TICK_US} us); "
+           "behind schedule: max "
+           + (f"{behind_max / 1e6:.1f} s" if behind_max >= 1_000_000
+              else f"{behind_max / 1000:.1f} ms"))
+    total = max(1, sum(hist))
+    r.info("vehicle tick execution histogram: "
+           + ", ".join(f"{lab} {100.0 * n / total:.0f}%" for lab, n in zip(EXEC_BIN_LABELS, hist))
+           + f" ({total} ticks)")
+    if window_s and window_s > 0:
+        hz = ticks / window_s
+        line = f"vehicle loop ran at {hz:.1f} Hz over {window_s:.0f} s (target {LOOP_HZ} Hz)"
+        if hz < 0.95 * LOOP_HZ:
+            r.warn(line, "the control loop is not keeping its rate: the histogram above says "
+                   "which ticks are slow. An I2C device that does not answer (IMU on 18/19, "
+                   "encoders on 17/16 and 25/24) can hold a call for 16 to 50 ms in the Teensy "
+                   "Wire library; run ./tvc selftest to see which one is missing")
+        else:
+            r.passed(line)
+    if exec_max > NOMINAL_TICK_US:
+        r.warn(f"a tick body took {exec_max} us, longer than the {NOMINAL_TICK_US} us period",
+               "the loop cannot hold 300 Hz while that happens; see the histogram for how often")
     if vehicle["tx_timeouts"]:
         r.warn(f"{vehicle['tx_timeouts']} transmissions never reported done and were cleared by "
                "the timeout",
                "check the RFM95W IRQ wire on pin 8 and its 3.3 V supply")
-    if vehicle["tx_skipped"]:
+    skipped = vehicle["tx_skipped"]
+    if skipped:
         expected = max(1.0, res["telem_expected"])
-        r.warn(f"{vehicle['tx_skipped']} TELEM frames ({100.0 * vehicle['tx_skipped'] / expected:.1f}%) "
-               "were skipped because the radio was still sending: the channel is saturated",
-               "ground/venv/bin/python tools/lora_airtime.py shows the duty cycle and the next "
-               "bandwidth step")
+        r.warn(f"{skipped} TELEM frames ({100.0 * skipped / expected:.1f}%) were skipped because "
+               "the radio was still sending",
+               "ground/venv/bin/python tools/lora_airtime.py shows the duty cycle; if the loop "
+               "rate above is low, fix that first, since frames are only noticed finished and "
+               "started on loop ticks")
+    else:
+        r.info("0 TELEM frames skipped at the sender")
 
 
 def report_link(res: dict, r: Results, limit_pct: float = 2.0,
-                vehicle: dict | None = None) -> bool:
+                vehicle: dict | None = None, window_s: float | None = None) -> bool:
     c = res["counts"]
     el = res["elapsed"]
     got = c["TELEM"]
@@ -983,9 +1007,10 @@ def report_link(res: dict, r: Results, limit_pct: float = 2.0,
     if len(res["overruns"]) >= 2 and res["overruns"][-1] > res["overruns"][0]:
         r.warn(f"the vehicle's loop-overrun count rose by "
                f"{res['overruns'][-1] - res['overruns'][0]} during the test",
-               "see the vehicle loop line below for the longest tick, and BRINGUP.md, known gaps")
+               "this counts every loop tick that ran, not late ones: compare it with the vehicle "
+               "loop rate below (BRINGUP.md, 'What loop_overrun_count counts')")
     if vehicle is not None:
-        report_vehicle(vehicle, res, r)
+        report_vehicle(vehicle, res, r, window_s)
     return r.ok
 
 
@@ -1003,11 +1028,16 @@ def cmd_link(args) -> int:
     r.info(f"listening on {dev} for {args.seconds:.0f} s; this sends nothing over the radio")
     report_airtime_budget(r)
     con = open_vehicle_console(r, args.teensy_port)
+    t_clear = None
     if con is not None:
-        start_vehicle_window(con, r)  # only text on the Teensy's own USB console
+        if start_vehicle_window(con, r):  # only text on the Teensy's own USB console
+            t_clear = time.time()
+    window_s = None
     try:
         res = measure_link(dev, args.seconds, r)
         vehicle = query_status(con) if (con is not None and res is not None) else None
+        if vehicle is not None and t_clear is not None:
+            window_s = time.time() - t_clear
     finally:
         if con is not None:
             con.close()
@@ -1015,8 +1045,8 @@ def cmd_link(args) -> int:
         return 1
     if con is not None and vehicle is None:
         r.warn("the Teensy console did not answer STATUS after the test",
-               "run STATUS in ./tvc monitor teensy to read loop_us_max and tx_skipped")
-    ok = report_link(res, r, vehicle=vehicle)
+               "run STATUS in ./tvc monitor teensy to read the loop timing and tx_skipped")
+    ok = report_link(res, r, vehicle=vehicle, window_s=window_s)
     print()
     print("LINK PASSED" if ok else "LINK FAILED")
     return 0 if ok else 1

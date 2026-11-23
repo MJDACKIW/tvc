@@ -92,11 +92,45 @@ constexpr uint32_t frameTimeOnAirUs(uint8_t payload_len) {
 
 // The downlink budget (SPEC.md Section 4.7): TELEM at telem_rate_hz plus STATUS at
 // status_rate_hz, as thousandths of each second the vehicle transmitter is on the air. EVENT
-// frames (23 ms each at SF7/BW250, three per event) and the 2 Hz HEARTBEAT uplink come on top.
+// frames (3 copies each) and the 2 Hz HEARTBEAT uplink come on top.
 constexpr uint32_t kTelemAirUs = frameTimeOnAirUs(sizeof(tvc::protocol::TelemPayload));
 constexpr uint32_t kStatusAirUs = frameTimeOnAirUs(sizeof(tvc::protocol::StatusPayload));
+constexpr uint32_t kEventAirUs = frameTimeOnAirUs(sizeof(tvc::protocol::EventPayload));
 constexpr uint32_t kDownlinkDutyPermille =
     (static_cast<uint32_t>(params::telemetry::telem_rate_hz) * kTelemAirUs +
      static_cast<uint32_t>(params::telemetry::status_rate_hz) * kStatusAirUs) / 1000;
+
+// ---- how the downlink is laid out in time (firmware/src/flight/tx_slots.h) ------------------
+//
+// TELEM owns a fixed grid, one slot per 1/telem_rate_hz. STATUS and EVENT frames go in the gap
+// after a TELEM frame, never across the next TELEM slot. The sizes below are what that
+// scheduler needs, all derived from the same airtime numbers.
+
+static_assert(params::telemetry::status_rate_hz >= 1 &&
+                  params::telemetry::telem_rate_hz % params::telemetry::status_rate_hz == 0,
+              "telemetry.telem_rate_hz must be a whole multiple of status_rate_hz: STATUS rides "
+              "on every Nth TELEM slot");
+
+constexpr uint32_t kTelemPeriodMs = 1000u / params::telemetry::telem_rate_hz;
+constexpr uint32_t kStatusEveryNTelem =
+    static_cast<uint32_t>(params::telemetry::telem_rate_hz / params::telemetry::status_rate_hz);
+
+// One tick of the 300 Hz loop: a frame can be noticed as finished, or started, only on a tick.
+constexpr uint32_t kLoopTickUs = 1000000u / params::control::loop_hz;
+
+// Loading RadioHead's FIFO before the transmitter starts: about 40 bytes over SPI at the
+// library's default 1 MHz, so roughly half a millisecond. An estimate from the bus speed, not a
+// measurement; it only widens the margins below.
+constexpr uint32_t kTxStartCostUs = 500;
+
+constexpr uint32_t ceilMs(uint32_t us) { return (us + 999) / 1000; }
+
+// STATUS falls due this long after its TELEM slot, i.e. once a TELEM that started on time would
+// have finished.
+constexpr uint32_t kStatusOffsetMs = ceilMs(kTxStartCostUs + kTelemAirUs);
+// What a STATUS or EVENT frame occupies the transmitter for, rounded up and with 1 ms spare
+// because the scheduler counts in whole milliseconds.
+constexpr uint32_t kStatusCostMs = ceilMs(kTxStartCostUs + kStatusAirUs) + 1;
+constexpr uint32_t kEventCostMs = ceilMs(kTxStartCostUs + kEventAirUs) + 1;
 
 }  // namespace tvc::protocol::lora

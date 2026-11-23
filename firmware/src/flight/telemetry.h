@@ -21,21 +21,21 @@ bool init();
 void onControlTick(const estimator::ShadowOut& pitch, const estimator::ShadowOut& yaw);
 
 // Call every loop-rate (300 Hz) tick (SPEC 4.2). Polls for uplink frames, then starts at most
-// one transmission: TELEM when its timer is due, otherwise a pending EVENT copy, otherwise
-// STATUS when its timer is due. Nothing here waits for the radio, and nothing is queued behind
-// a frame in flight:
-//  - a TELEM that falls due while a frame is still on the air is skipped and counted
-//    (txSkipped()); the next one comes a period later;
-//  - an EVENT copy or a STATUS that finds the radio busy simply stays due and goes out on the
-//    first tick after the radio is free (it is rebuilt from live state at that moment, so it
-//    is never stale). Without that, STATUS would lose to the TELEM that falls due in the same
-//    millisecond at every whole second and never be sent.
-// Most calls do no send at all; this is cheap to call unconditionally.
+// one transmission, chosen by tx_slots.h:
+//  - TELEM on its fixed grid. One that falls due while a frame is still on the air is skipped
+//    and counted (txSkipped()), never queued.
+//  - an EVENT copy, then STATUS, but only in the gap after a TELEM frame and only if the frame
+//    will have left the air before the next TELEM slot. STATUS falls due a fixed offset after
+//    its TELEM slot (about 22 ms at BW500) instead of in the same millisecond as the next
+//    TELEM. A frame that does not fit stays due and goes in the next gap; it is built from live
+//    state when it is sent, so it is never stale.
+// Nothing here waits for the radio. Most calls do no send at all; cheap to call unconditionally.
 void onLoopTick();
 
 // Schedules an EVENT frame for now and two retransmits at +150 ms and +300 ms (SPEC 4.7:
-// "retransmitted 3x"), all sent from onLoopTick() as the radio frees up; the first copy goes
-// out inside this call if the radio is idle. event_code values: protocol/event_codes.h.
+// "retransmitted 3x"). Nothing is sent from this call; onLoopTick() sends each copy in the
+// first gap after a TELEM frame once the copy is due, normally within one TELEM period.
+// event_code values: protocol/event_codes.h.
 void onEvent(uint8_t event_code, int16_t aux);
 
 // TELEM frames skipped because a frame was still in flight when they fell due, and stuck
