@@ -563,7 +563,7 @@ class MainWindow(QMainWindow):
                           "iae_t0", "peak_tilt"],
             "Comms": ["link", "rssi", "uplink_rssi", "loss", "rx", "crc", "ack", "unacked",
                       "hash_vehicle", "hash_local", "fw"],
-            "Storage & Health": ["sd", "flash", "boot", "overruns", "faults", "missing"],
+            "Storage & Health": ["sd", "flash", "boot", "overruns", "faults", "missing", "present"],
         }
         labels = {
             "state": "State", "mode": "Mode", "profile": "Profile", "t_ms": "Mission t",
@@ -578,6 +578,7 @@ class MainWindow(QMainWindow):
             "hash_vehicle": "Params (vehicle)", "hash_local": "Params (GUI)", "fw": "FW git",
             "sd": "SD written", "flash": "Flash written", "boot": "Boot count",
             "overruns": "Loop overruns", "faults": "Fault bits", "missing": "MEASURE missing",
+            "present": "Parts absent",
         }
         mono = QFont("Menlo")
         mono.setPointSize(11)
@@ -876,6 +877,10 @@ class MainWindow(QMainWindow):
             self._set("missing", f"{len(missing)} params" if missing else "none",
                       AMBER if missing else GREEN)
             it.setToolTip(1, "\n".join(missing))
+            absent = s["absent_names"]  # not found at SELFTEST, so never polled
+            self._set("present", ", ".join(absent) if absent else "none",
+                      AMBER if absent else GREEN)
+            self.rows["present"].setToolTip(1, "present: " + ", ".join(s["present_names"]))
         self._set("hash_local", m.tables.local_hash_hex[:12] or "none")
         self._set("link", self.link.kind)
         self.rows["link"].setToolTip(1, self.link.description)

@@ -11,8 +11,12 @@ constexpr int kBuzzer = 4;
 constexpr int kHxDout = 6;    // single HX711, summed across the four load cells (two diagonal
 constexpr int kHxSck = 7;     // pairs) upstream in analog hardware -- one logical channel here.
 
-// RFM95W on the vehicle (radio.cpp). RST is on 9, not 24: pin 24 is Wire2 SCL (encoder #2),
-// and radio::begin() drives RST as a GPIO output (SPEC.md Section 4.5).
+// RFM95W on the vehicle (radio.cpp). SPEC.md Section 4.5 puts RST on 9, because pin 24 is
+// Wire2 SCL (encoder #2). The radio on this build is wired to RST = 24 (commit eb37d8d), so
+// the two share a pin: radio::begin() drives it as a GPIO output after Wire2 was set up, and
+// Wire2 never has a working clock. i2c_bus.cpp therefore never touches Wire2 while this holds,
+// and SELFTEST reports encoder #2 as unusable. Moving the RST wire to pin 9 and setting
+// kRfm95Rst to 9 removes the conflict.
 constexpr int kRfm95Irq = 8;
 constexpr int kRfm95Rst = 24;
 constexpr int kRfm95Cs = 10;
@@ -25,6 +29,8 @@ constexpr int kPyroCont = A14;  // = pin 38. Final resolution of the A2/Wire1 co
 // Wire  (MPU-6050, 0x68):  SDA 18 / SCL 19 (fixed default bus)
 // Wire1 (AS5600 #1, 0x36): SDA 17 / SCL 16
 // Wire2 (AS5600 #2, 0x36): SDA 25 / SCL 24
+constexpr int kWire2Sda = 25;
+constexpr int kWire2Scl = 24;
 constexpr uint8_t kMpuAddr = 0x68;
 constexpr uint8_t kAs5600Addr = 0x36;
 
@@ -38,5 +44,8 @@ constexpr int kModeJumperB = 27;
 // Resistor-divider battery voltage sense, added for TELEM's batt_mv (SPEC.md Section 4.7).
 // Scale factor is params::power::batt_adc_to_mv (MEASURE until the divider is characterized).
 constexpr int kBattSense = A16;
+
+// True while the radio's reset line and encoder #2's clock line are the same pin.
+constexpr bool kWire2SharedWithRadioRst = (kRfm95Rst == kWire2Scl) || (kRfm95Rst == kWire2Sda);
 
 }  // namespace tvc::pins

@@ -28,8 +28,10 @@ bool selftestWhoAmI();          // whoAmI() == kMpuAddr
 void calibrateGyroBias(uint32_t duration_ms);
 
 // Burst-reads accel+gyro, applies kFrameBodyFromSensor, subtracts gyro bias. Updates the
-// values returned by the accessors below.
-void read();
+// values returned by the accessors below. The read is bounded (i2c_bus.h): it never takes more
+// than the tick's 1 ms I2C budget, and returns false, leaving the previous sample in place, if
+// the bus did not deliver.
+bool read();
 
 const int16_t* gyroRawCounts();   // body frame, post-remap, bias-corrected, for Record
 const int16_t* accelRawCounts();  // body frame, post-remap, for Record

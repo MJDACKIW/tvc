@@ -61,6 +61,8 @@ int main() {
     s.peak_thrust_x10 = 331; s.peak_tilt_p_x100 = 512; s.peak_tilt_y_x100 = 9;
     const uint8_t g4[4] = {0x4d, 0xef, 0xac, 0x7d};
     std::memcpy(s.fw_git_hash, g4, 4);
+    s.present_mask = present_bits::kImu | present_bits::kEncPitch | present_bits::kSd |
+                     present_bits::kRadio;  // 0x53: no yaw encoder, no load cell, no flash mirror
     emit("STATUS", PacketType::kStatus, s);
 
     EventPayload e{}; e.t_ms = -3000; e.event_code = 11; e.aux = 3;
@@ -146,7 +148,7 @@ def test_status(cpp):
         boot_count=42, missing_measure_bits=0x7FFF, loop_overrun_count=3, sat_pct_p=7,
         sat_pct_y=100, running_iae_p_degs=12.345, running_iae_y_degs=0.555,
         peak_thrust_N=33.15, peak_tilt_p_deg=5.125, peak_tilt_y_deg=0.095,
-        fw_git_hash4=bytes.fromhex("4defac7d"))
+        fw_git_hash4=bytes.fromhex("4defac7d"), present_mask=0x53)
     assert tc.encode_frame(tc.PacketType.STATUS, payload) == frame
     tables = tc.Tables(event_names={}, measure_bit_names={0: "control.kp"},
                        local_hash_hex="a1410daabddb" + "0" * 52)
@@ -155,6 +157,9 @@ def test_status(cpp):
     assert d["fault_names"] == ["MEASURE_MISSING", "LOOP_OVERRUN", "HX711"]  # 0x1081
     assert d["missing_measure_names"][0] == "control.kp" and len(d["missing_measure_names"]) == 15
     assert d["rssi_last_uplink_dbm"] == -87 and d["fw_git_hash_hex"] == "4defac7d"
+    assert d["present_mask"] == 0x53
+    assert d["present_names"] == ["imu", "encoder_pitch", "sd", "radio"]
+    assert d["absent_names"] == ["encoder_yaw", "load_cell", "flash_mirror"]
 
 
 def test_event_ack_uplink(cpp):

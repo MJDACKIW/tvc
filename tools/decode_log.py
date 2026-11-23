@@ -26,14 +26,14 @@ sys.path.insert(0, str(REPO_ROOT / "protocol"))
 
 # State/mode/profile names, fault bits, and the CRC are shared with the telemetry side
 # (protocol/telem_codec.py) rather than kept as a second hand-synced copy here.
-from telem_codec import FAULT_BITS, crc16_ccitt_false  # noqa: E402
+from telem_codec import FAULT_BITS, absent_names, crc16_ccitt_false, present_names  # noqa: E402
 from telem_codec import MODE_NAMES as MODE_NAME  # noqa: E402
 from telem_codec import PROFILE_NAMES as PROFILE_NAME  # noqa: E402
 from telem_codec import STATE_NAMES as STATE_NAME  # noqa: E402
 
 # '<' little endian, no padding -- matches firmware/src/flight/logging_sd.cpp's #pragma pack(1)
-HEADER_FMT = "<II65s20sBB2sII"
-#              magic schema params_hash git_hash mode profile pad boot_count record_size
+HEADER_FMT = "<II65s20sBBBBII"
+#              magic schema params_hash git_hash mode profile present_mask pad boot_count record_size
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 HEADER_MAGIC = 0x4C435654  # "TVCL"
 
@@ -73,8 +73,8 @@ def load_header(raw: bytes):
     if len(raw) < HEADER_SIZE:
         raise LogFormatError(f"file is only {len(raw)} bytes, shorter than the "
                              f"{HEADER_SIZE}-byte header")
-    magic, schema, params_hash, git_hash, mode, profile, _pad, boot_count, record_size = \
-        struct.unpack_from(HEADER_FMT, raw, 0)
+    magic, schema, params_hash, git_hash, mode, profile, present_mask, _pad, boot_count, \
+        record_size = struct.unpack_from(HEADER_FMT, raw, 0)
     if magic != HEADER_MAGIC:
         raise LogFormatError(f"header magic 0x{magic:08X} != expected 0x{HEADER_MAGIC:08X} -- "
                              "this is not a teensy_flight SD log (wrong file, or the header "
@@ -89,6 +89,9 @@ def load_header(raw: bytes):
         "git_hash": git_hash.split(b"\0", 1)[0].decode("ascii", "replace"),
         "mode": mode,
         "profile": profile,
+        # protocol::present_bits at SELFTEST; 0 in logs written before the mask existed (a
+        # current log always has at least the IMU and SD bits set)
+        "present_mask": present_mask,
         "boot_count": boot_count,
     }
 
@@ -130,6 +133,12 @@ def summarize(header, r, crc_fail):
     print(f"mode         : {mode_name}")
     print(f"profile      : {profile_name}")
     print(f"boot_count   : {header['boot_count']}")
+    if header["present_mask"]:
+        print(f"present      : {', '.join(present_names(header['present_mask']))}")
+        absent = absent_names(header["present_mask"])
+        print(f"not present  : {', '.join(absent) if absent else 'none'} (never polled this run)")
+    else:
+        print("present      : not recorded (log predates the presence mask)")
     print(f"fw git hash  : {header['git_hash']}")
     cur_hash = current_params_hash()
     match = "MATCH" if cur_hash and cur_hash == header["params_hash"] else \

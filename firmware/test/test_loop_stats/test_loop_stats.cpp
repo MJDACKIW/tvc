@@ -98,10 +98,32 @@ void test_reset_clears_and_ignores_the_next_tick(void) {
     TEST_ASSERT_EQUAL_UINT32(3333, s.periodMaxUs());
 }
 
+// Per-section maxima find what makes a slow tick slow. Like everything else, the first tick
+// after a reset does not count.
+void test_section_maxima_ignore_the_first_tick_and_clear_on_reset(void) {
+    LoopStats s;
+    s.section(0, 9000);  // first tick: ignored
+    s.record(0, 100, 0);
+    TEST_ASSERT_EQUAL_UINT32(0, s.sectionMaxUs(0));
+    s.section(0, 400);
+    s.section(2, 50000);
+    s.section(0, 700);
+    s.section(4, 90);
+    s.record(3333, 3333 + 800, 0);
+    TEST_ASSERT_EQUAL_UINT32(700, s.sectionMaxUs(0));
+    TEST_ASSERT_EQUAL_UINT32(0, s.sectionMaxUs(1));
+    TEST_ASSERT_EQUAL_UINT32(50000, s.sectionMaxUs(2));
+    TEST_ASSERT_EQUAL_UINT32(90, s.sectionMaxUs(4));
+    s.reset();
+    s.section(2, 123456);  // first tick after the reset: ignored again
+    s.record(10000, 10100, 0);
+    for (int i = 0; i < LoopStats::kSections; i++) TEST_ASSERT_EQUAL_UINT32(0, s.sectionMaxUs(i));
+}
+
 // ---- what loop_overrun_count counts ------------------------------------------------------------
-// main.cpp starts a tick when its elapsedMicros timer reaches one period, passes the timer's
-// value as loop_us, then subtracts one period ("preserve phase"). This runs the same arithmetic
-// with a given tick cost and applies the unchanged overrun rule.
+// The rule: a tick overruns when its body took more than 3300 us to execute, judged when it
+// ends (sequencer.cpp). main.cpp starts a tick when its elapsedMicros timer reaches one period,
+// then subtracts one period ("preserve phase"); this runs that arithmetic with a given tick cost.
 struct LoopRun {
     uint32_t ticks = 0, overruns = 0;
     LoopStats stats;
@@ -118,7 +140,7 @@ static LoopRun runLoop(uint32_t exec_us, uint32_t seconds) {
             const uint32_t loop_us = static_cast<uint32_t>(now - epoch);
             epoch += kPeriod;
             r.ticks++;
-            if (countsAsOverrun(loop_us)) r.overruns++;
+            if (countsAsOverrun(exec_us)) r.overruns++;
             const uint32_t behind = loop_us > kPeriod ? loop_us - kPeriod : 0;
             r.stats.record(static_cast<uint32_t>(now), static_cast<uint32_t>(now + exec_us),
                            behind);
@@ -130,21 +152,51 @@ static LoopRun runLoop(uint32_t exec_us, uint32_t seconds) {
     return r;
 }
 
-// Healthy loop: 1 ms per tick, 300 ticks a second. The rule still counts every one of them.
-// This pins down the defect (a tick that has only just been started is never under 3300 us
-// old), it does not endorse it: if the rule is ever fixed, this test is the one to change.
-void test_current_overrun_rule_counts_every_tick_even_when_healthy(void) {
+void test_overrun_threshold_is_3300_us_of_execution_time(void) {
+    TEST_ASSERT_FALSE(countsAsOverrun(0));
+    TEST_ASSERT_FALSE(countsAsOverrun(3300));
+    TEST_ASSERT_TRUE(countsAsOverrun(3301));
+    TEST_ASSERT_TRUE(countsAsOverrun(52000));
+}
+
+// Healthy loop: 1 ms per tick, 300 ticks a second, and the counter stays at zero. (Until the
+// rule was moved to execution time it counted every one of these ticks.)
+void test_a_healthy_loop_reads_zero_overruns(void) {
     LoopRun r = runLoop(1000, 60);
     TEST_ASSERT_INT_WITHIN(20, 18000, static_cast<int>(r.ticks));
-    TEST_ASSERT_EQUAL_UINT32(r.ticks, r.overruns);
+    TEST_ASSERT_EQUAL_UINT32(0, r.overruns);
     TEST_ASSERT_TRUE(r.stats.behindMaxUs() < 100);    // on schedule
     TEST_ASSERT_TRUE(r.stats.periodMaxUs() < 3400);
     TEST_ASSERT_TRUE(r.stats.execMaxUs() == 1000);
 }
 
-// Overloaded loop: every tick costs 52 ms. The counter rises once per tick that ran (about 19 a
-// second, 1154 in 60 s), not once per 3.3 ms and not once per radio frame, and "behind" grows
-// by about (1 - 3333/52000) seconds per second without limit.
+// A loop that overruns now and then reads the number of slow ticks: here every 100th tick takes
+// 5 ms. Also shows the loop recovers: the backlog from one slow tick drains.
+void test_occasional_slow_ticks_are_counted_one_each(void) {
+    constexpr uint32_t kPeriod = 3333;
+    uint64_t now = 0, epoch = 0;
+    uint32_t ticks = 0, overruns = 0;
+    LoopStats stats;
+    while (now < 60ULL * 1000000ULL) {
+        if (now - epoch >= kPeriod) {
+            const uint32_t loop_us = static_cast<uint32_t>(now - epoch);
+            epoch += kPeriod;
+            ticks++;
+            const uint32_t exec_us = (ticks % 100 == 0) ? 5000 : 800;
+            if (countsAsOverrun(exec_us)) overruns++;
+            stats.record(static_cast<uint32_t>(now), static_cast<uint32_t>(now + exec_us),
+                         loop_us > kPeriod ? loop_us - kPeriod : 0);
+            now += exec_us;
+        }
+        now += 2;
+    }
+    TEST_ASSERT_INT_WITHIN(2, static_cast<int>(ticks / 100), static_cast<int>(overruns));
+    TEST_ASSERT_TRUE(stats.behindMaxUs() < 2000);  // never more than the one slow tick's excess
+}
+
+// Overloaded loop: every tick costs 52 ms. Every tick overruns, so the counter rises once per
+// tick that ran (about 19 a second, 1154 in 60 s, the bench's +1155), and "behind" grows by
+// about (1 - 3333/52000) seconds per second without limit.
 void test_overloaded_loop_overruns_once_per_tick_that_ran_and_falls_behind(void) {
     LoopRun r = runLoop(52000, 60);
     TEST_ASSERT_INT_WITHIN(5, 1153, static_cast<int>(r.ticks));
@@ -166,7 +218,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_histogram_counts_every_recorded_tick);
     RUN_TEST(test_timer_wraparound);
     RUN_TEST(test_reset_clears_and_ignores_the_next_tick);
-    RUN_TEST(test_current_overrun_rule_counts_every_tick_even_when_healthy);
+    RUN_TEST(test_section_maxima_ignore_the_first_tick_and_clear_on_reset);
+    RUN_TEST(test_overrun_threshold_is_3300_us_of_execution_time);
+    RUN_TEST(test_a_healthy_loop_reads_zero_overruns);
+    RUN_TEST(test_occasional_slow_ticks_are_counted_one_each);
     RUN_TEST(test_overloaded_loop_overruns_once_per_tick_that_ran_and_falls_behind);
     return UNITY_END();
 }

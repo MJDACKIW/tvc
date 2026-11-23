@@ -36,7 +36,8 @@ struct LogHeader {
     char git_hash[20];
     uint8_t mode;
     uint8_t profile;
-    uint8_t reserved0[2];
+    uint8_t present_mask;  // protocol::present_bits at SELFTEST; 0 in logs from older firmware
+    uint8_t reserved0;
     uint32_t boot_count;
     uint32_t record_size;
 };
@@ -65,7 +66,7 @@ void writeRange(uint32_t start_idx, uint32_t count) {
 
 }  // namespace
 
-bool begin(Mode mode, Profile profile) {
+bool begin(Mode mode, Profile profile, uint8_t present_mask) {
     g_open = false;
     g_head = 0;
     g_flushed = 0;
@@ -90,6 +91,7 @@ bool begin(Mode mode, Profile profile) {
     strncpy(h.git_hash, kFirmwareGitHash, sizeof(h.git_hash) - 1);
     h.mode = static_cast<uint8_t>(mode);
     h.profile = static_cast<uint8_t>(profile);
+    h.present_mask = present_mask;
     g_boot_count = nextBootCount();
     h.boot_count = g_boot_count;
     h.record_size = sizeof(Record);

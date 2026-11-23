@@ -67,9 +67,11 @@ void test_wider_bandwidth_never_takes_longer(void) {
 void test_frame_airtime_includes_the_radiohead_header(void) {
     TEST_ASSERT_EQUAL_UINT32(timeOnAirUs(33 + kRadioHeadHeaderBytes),
                              frameTimeOnAirUs(sizeof(tvc::protocol::TelemPayload)));
-    TEST_ASSERT_EQUAL_UINT32(timeOnAirUs(48 + kRadioHeadHeaderBytes),
+    TEST_ASSERT_EQUAL_UINT32(timeOnAirUs(49 + kRadioHeadHeaderBytes),
                              frameTimeOnAirUs(sizeof(tvc::protocol::StatusPayload)));
     TEST_ASSERT_EQUAL_UINT32(timeOnAirUs(37), kTelemAirUs);
+    TEST_ASSERT_EQUAL_UINT32(timeOnAirUs(53), kStatusAirUs);
+    // 53 B (STATUS with its presence byte) is the same 88 symbols as 52 B was: no airtime change
     TEST_ASSERT_EQUAL_UINT32(timeOnAirUs(52), kStatusAirUs);
 }
 

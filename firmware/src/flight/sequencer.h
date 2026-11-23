@@ -53,6 +53,9 @@ bool dryRun();
 bool armSwitchClosed();  // ARM_SENSE_PIN reads closed (input pullup, switch to GND)
 uint16_t faultBits();
 uint32_t loopOverrunCount();
+// protocol::present_bits: which parts answered at the last SELFTEST. A part whose bit is clear
+// is never polled or written afterwards. Goes into STATUS and the SD log header.
+uint8_t presentMask();
 
 // ms since ignition, negative pre-launch (SPEC.md Section 4.7's TELEM/EVENT t_ms): counts down
 // to 0 during COUNTDOWN (the scheduled ignition instant), counts up from 0 from IGNITE onward,

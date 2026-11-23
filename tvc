@@ -344,7 +344,10 @@ STATUS_RE = re.compile(
     r"(?: ticks=(?P<ticks>\d+) exec_us_max=(?P<exec_us_max>\d+) "
     r"period_us_max=(?P<period_us_max>\d+) behind_us_max=(?P<behind_us_max>\d+) "
     r"exec_hist=(?P<exec_hist>\d+(?:,\d+){5}) tx_skipped=(?P<tx_skipped>\d+) "
-    r"tx_timeouts=(?P<tx_timeouts>\d+))?")
+    r"tx_timeouts=(?P<tx_timeouts>\d+)"
+    r"(?: present=0x(?P<present>[0-9A-Fa-f]+) sec_us_max=(?P<sec_us_max>\d+(?:,\d+){4}) "
+    r"i2c_timeouts=(?P<i2c_timeouts>\d+(?:,\d+){2}) i2c_errors=(?P<i2c_errors>\d+(?:,\d+){2}) "
+    r"i2c_skipped=(?P<i2c_skipped>\d+))?)?")
 BANNER_FW_RE = re.compile(r"firmware ready\. fw=(\S+)")
 
 
@@ -366,6 +369,11 @@ def query_status(con: Console, timeout: float = 3.0, tries: int = 3) -> dict | N
                         d[key] = int(d[key])
                 if d.get("exec_hist") is not None:
                     d["exec_hist"] = [int(x) for x in d["exec_hist"].split(",")]
+                if d.get("present") is not None:
+                    d["present"] = int(d["present"], 16)
+                    d["i2c_skipped"] = int(d["i2c_skipped"])
+                    for key in ("sec_us_max", "i2c_timeouts", "i2c_errors"):
+                        d[key] = [int(x) for x in d[key].split(",")]
                 return d
     return None
 
@@ -709,14 +717,16 @@ SELFTEST_CHECKS = [
     ("radio init", r"radio init",
      "check the RFM95W: CS pin 10, IRQ pin 8, RST pin 9, SPI 11/12/13, 3.3 V, antenna "
      "attached; then power-cycle the Teensy (radio init only runs at boot)"),
-    ("encoders (both AS5600)", r"^encoders? ",
-     "check the AS5600 boards: #1 on SDA 17 / SCL 16, #2 on SDA 25 / SCL 24, address 0x36, "
-     "magnets in place"),
+    ("encoders (both AS5600)", r"^encoders?\b",
+     "optional: an absent encoder is not read and its servo axis is not confirmed. To use "
+     "one: #1 on SDA 17 / SCL 16, #2 on SDA 25 / SCL 24, address 0x36, magnet in place. "
+     "Encoder #2 cannot work while the radio's RST wire is on pin 24"),
     ("servos (sweep +-5 deg, encoder confirms)", r"servo sweep",
      "check servo power and linkage; the encoder must move the way params.yaml sign_x / "
      "sign_y says"),
-    ("load cell (HX711)", r"HX711",
-     "check the HX711: DOUT pin 6, SCK pin 7, 3.3 V, load-cell leads"),
+    ("load cell (HX711)", r"HX711|load cell",
+     "optional: the load cell was dropped; an absent one is not read and ARM does not wait "
+     "for it. To use one: DOUT pin 6, SCK pin 7, 3.3 V, load-cell leads"),
     ("IMU axis remap determinant", r"determinant",
      "the R_B<-S remap in imu.cpp is not a signed permutation; fix it before anything else"),
 ]
@@ -758,6 +768,7 @@ def run_selftest_on(con: Console, r: Results) -> bool:
     results = [(m.group(1), m.group(2)) for ln in lines if (m := SELFTEST_LINE_RE.match(ln))]
     missing = [ln.split("MISSING (still MEASURE):")[1].strip() for ln in lines
                if "MISSING (still MEASURE):" in ln]
+    claimed: set[str] = set()
     for label, pattern, nxt in SELFTEST_CHECKS:
         hit = next(((s, t) for s, t in results if re.search(pattern, t)), None)
         if hit is None:
@@ -766,7 +777,10 @@ def run_selftest_on(con: Console, r: Results) -> bool:
                          "reflash the current firmware: ./tvc flash teensy")
             continue
         status, text = hit
-        if status == "PASS":
+        if status == "WARN":
+            r.warn(f"{label}: {text}", nxt)
+            claimed.add(text)
+        elif status == "PASS":
             detail = f" (logging to {text[6:]})" if text.startswith("SD -> ") else ""
             r.passed(f"{label}{detail}")
         elif status == "SKIP":
@@ -774,6 +788,10 @@ def run_selftest_on(con: Console, r: Results) -> bool:
                      "fix the failures above, then run ./tvc selftest again")
         else:
             r.failed(f"{label}: {text}", nxt)
+    for status, text in results:
+        if status == "WARN" and text not in claimed and not text.startswith("MEASURE"):
+            r.warn(text, "BRINGUP.md has the pin map; SPEC.md 4.5 puts the radio RST on pin 9"
+                   if "RST" in text else None)
     if missing:
         r.warn("MEASURE values still unset (these block ARM, not SELFTEST): "
                + ", ".join(missing),
@@ -869,6 +887,11 @@ NOMINAL_TICK_US = 3333      # 300 Hz loop; params.yaml control.loop_hz
 LOOP_HZ = 300
 # Upper edges of the firmware's execution-time histogram bins (loop_stats.h kEdgesUs), in us.
 EXEC_BIN_LABELS = ["<0.5 ms", "0.5-1 ms", "1-2 ms", "2-3.3 ms", "3.3-10 ms", ">=10 ms"]
+# The sections of one tick the firmware times separately (sequencer.cpp Section enum), and the
+# I2C buses it counts timeouts on (i2c_guard.h Bus).
+SECTION_LABELS = ["IMU read", "load cell", "encoders", "log push", "telemetry"]
+BUS_LABELS = ["IMU (Wire)", "encoder pitch (Wire1)", "encoder yaw (Wire2)"]
+PRESENT_NAMES = ["IMU", "encoder pitch", "encoder yaw", "load cell", "SD", "flash mirror", "radio"]
 
 
 def open_vehicle_console(r: Results, override: str | None) -> "Console | None":
@@ -940,6 +963,20 @@ def report_vehicle(vehicle: dict, res: dict, r: Results, window_s: float | None 
            "behind schedule: max "
            + (f"{behind_max / 1e6:.1f} s" if behind_max >= 1_000_000
               else f"{behind_max / 1000:.1f} ms"))
+    if vehicle.get("present") is not None:
+        mask = vehicle["present"]
+        here = [n for i, n in enumerate(PRESENT_NAMES) if mask & (1 << i)]
+        gone = [n for i, n in enumerate(PRESENT_NAMES) if not mask & (1 << i)]
+        r.info(f"vehicle parts present at SELFTEST (0x{mask:02X}): {', '.join(here) or 'none'}; "
+               f"absent, so never polled: {', '.join(gone) or 'none'}")
+        secs = vehicle["sec_us_max"]
+        r.info("slowest each tick part took: "
+               + ", ".join(f"{lab} {us} us" for lab, us in zip(SECTION_LABELS, secs)))
+        for lab, n in zip(BUS_LABELS, vehicle["i2c_timeouts"]):
+            if n:
+                r.warn(f"{n} I2C timeouts on {lab}: each was cut off at the tick's 1 ms budget",
+                       "the bus is retried every 20 ms; check its wiring and pull-ups, or the "
+                       "pin it shares (pin 24 is the radio RST wire on this build)")
     total = max(1, sum(hist))
     r.info("vehicle tick execution histogram: "
            + ", ".join(f"{lab} {100.0 * n / total:.0f}%" for lab, n in zip(EXEC_BIN_LABELS, hist))
@@ -955,8 +992,14 @@ def report_vehicle(vehicle: dict, res: dict, r: Results, window_s: float | None 
         else:
             r.passed(line)
     if exec_max > NOMINAL_TICK_US:
+        worst = ""
+        if vehicle.get("sec_us_max"):
+            secs = vehicle["sec_us_max"]
+            i = max(range(len(secs)), key=lambda k: secs[k])
+            worst = f" The slowest part was {SECTION_LABELS[i]} at {secs[i]} us."
         r.warn(f"a tick body took {exec_max} us, longer than the {NOMINAL_TICK_US} us period",
-               "the loop cannot hold 300 Hz while that happens; see the histogram for how often")
+               "the loop cannot hold 300 Hz while that happens; see the histogram for how "
+               "often." + worst)
     if vehicle["tx_timeouts"]:
         r.warn(f"{vehicle['tx_timeouts']} transmissions never reported done and were cleared by "
                "the timeout",
@@ -1007,8 +1050,8 @@ def report_link(res: dict, r: Results, limit_pct: float = 2.0,
     if len(res["overruns"]) >= 2 and res["overruns"][-1] > res["overruns"][0]:
         r.warn(f"the vehicle's loop-overrun count rose by "
                f"{res['overruns'][-1] - res['overruns'][0]} during the test",
-               "this counts every loop tick that ran, not late ones: compare it with the vehicle "
-               "loop rate below (BRINGUP.md, 'What loop_overrun_count counts')")
+               "it counts ticks whose body ran longer than 3.3 ms: the vehicle loop lines below "
+               "say which part was slow (BRINGUP.md, 'What loop_overrun_count counts')")
     if vehicle is not None:
         report_vehicle(vehicle, res, r, window_s)
     return r.ok

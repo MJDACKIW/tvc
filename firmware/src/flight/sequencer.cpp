@@ -8,6 +8,7 @@
 #include "estimator.h"
 #include "event_codes.h"
 #include "git_hash.h"
+#include "i2c_bus.h"
 #include "imu.h"
 #include "loadcell.h"
 #include "logging_flash.h"
@@ -22,6 +23,8 @@
 
 namespace tvc::flight::sequencer {
 namespace {
+
+namespace pb = protocol::present_bits;
 
 // ---- timing constants -------------------------------------------------------------------
 // SPEC.md 4.3 gives these directly (not physical calibration, so not params.yaml MEASURE):
@@ -43,6 +46,10 @@ Profile g_profile = Profile::kHold;
 bool g_dry_run = false;
 uint16_t g_fault_bits = 0;
 bool g_radio_ok = false;  // telemetry::init() result from begin(); reported by SELFTEST
+// protocol::present_bits: what answered at the last SELFTEST. Parts whose bit is clear are never
+// polled or written afterwards (encoders.cpp, loadcell.cpp, logging_sd.cpp each check their own
+// flag; this is the summary that goes into STATUS and the SD log header).
+uint8_t g_present = 0;
 
 uint32_t g_t_state_ms = 0;
 uint32_t g_t_ignite_us = 0;
@@ -53,6 +60,7 @@ bool g_fire_confirmed = false;
 
 uint32_t g_loop_overrun_count = 0;
 LoopStats g_loop_stats;  // execution time, period and backlog of each tick (loop_stats.h)
+enum Section : int { kSecImu, kSecLoadcell, kSecEncoders, kSecRecord, kSecTelemetry };
 uint32_t g_tick_count = 0;  // for the 300 Hz / 150 Hz split
 
 float g_ol_pitch_delta = 0.0f, g_ol_yaw_delta = 0.0f;  // open-loop actuator state (applied)
@@ -130,10 +138,10 @@ void enter(State s) {
 }
 
 // STAND_OPEN's own required-MEASURE set: only what this mode actually needs to operate
-// correctly (servo calibration to move to a real angle; load-cell scale so thrust_N and the
-// ignition/burnout thrust gates mean something). kp/kd/kalman.q/r are deliberately excluded --
-// STAND_OPEN never closes the loop, and gating a plant-ID run on the very numbers that run is
-// meant to help derive would be circular. See the session summary for the full reasoning.
+// correctly, the servo calibration to move to a real angle. kp/kd/kalman.q/r are deliberately
+// excluded: STAND_OPEN never closes the loop, and gating a plant-ID run on the very numbers that
+// run is meant to help derive would be circular. The load-cell scale is not in the set either:
+// the load cell was dropped from this build, and a stand without one can still be armed.
 bool measureGateOk(bool print_missing) {
     struct Item { const char* name; float value; };
     const Item items[] = {
@@ -141,7 +149,6 @@ bool measureGateOk(bool print_missing) {
         {"servo.us_per_deg_y", params::servo::us_per_deg_y},
         {"servo.neutral_us_x", params::servo::neutral_us_x},
         {"servo.neutral_us_y", params::servo::neutral_us_y},
-        {"loadcell.hx_scale_counts_per_n", params::loadcell::hx_scale_counts_per_n},
     };
     bool ok = true;
     for (const auto& it : items) {
@@ -207,6 +214,7 @@ void abortInternal(const char* why) {
 void runSelftest() {
     enter(State::kSelftest);
     g_fault_bits = 0;
+    g_present = 0;  // a re-run starts from what answers now, not from the last run
     bool hard_fault = false;
 
     Serial.println(F("--- SELFTEST ---"));
@@ -225,18 +233,42 @@ void runSelftest() {
         hard_fault = true;
         Serial.println(F("[FAIL] IMU WHO_AM_I"));
     } else {
+        g_present |= pb::kImu;
         Serial.println(F("[PASS] IMU WHO_AM_I"));
         Serial.println(F("       sampling gyro bias, keep the stand still..."));
         imu::calibrateGyroBias(kGyroBiasCalMs);
         digitalWriteFast(pins::kLedPowerImuOk, HIGH);
     }
 
-    if (!logging_sd::begin(kFixedMode, g_profile)) {
-        g_fault_bits |= fault_bits::kSd;
-        hard_fault = true;
-        Serial.println(F("[FAIL] SD card (mount/open/preallocate)"));
+    // Optional parts: asked once, here, and trusted afterwards. One that does not answer is a
+    // WARN, not a FAIL, and its presence bit stays clear so nothing polls or writes it again.
+    encoders::probe();
+    const bool enc_p = encoders::pitchPresent(), enc_y = encoders::yawPresent();
+    if (enc_p) g_present |= pb::kEncPitch;
+    if (enc_y) g_present |= pb::kEncYaw;
+    if (enc_p && enc_y) {
+        encoders::zero();
+        Serial.println(F("[PASS] encoders present (pitch and yaw), neutral captured"));
     } else {
-        Serial.printf("[PASS] SD -> %s\n", logging_sd::filename());
+        encoders::zero();  // captures neutral for whichever axis is present
+        Serial.printf("[WARN] encoders: pitch %s, yaw %s; an absent encoder is never read and "
+                      "its servo axis is not confirmed\n",
+                      enc_p ? "present" : "absent", enc_y ? "present" : "absent");
+    }
+    if (pins::kWire2SharedWithRadioRst) {
+        Serial.printf("[WARN] pin %d is both the radio RST wire and encoder #2's SCL (Wire2): "
+                      "encoder #2 cannot work and Wire2 is left alone (SPEC.md 4.5 puts RST on "
+                      "9)\n", pins::kWire2Scl);
+    }
+
+    const bool hx_ok = loadcell::tare();
+    loadcell::setPresent(hx_ok);
+    if (hx_ok) {
+        g_present |= pb::kLoadCell;
+        Serial.println(F("[PASS] HX711 tare"));
+    } else {
+        Serial.println(F("[WARN] load cell absent (HX711 never asserted DOUT): never read, "
+                         "thrust reads 0, ARM does not wait for it"));
     }
 
     if (!logging_flash::begin()) {
@@ -244,6 +276,7 @@ void runSelftest() {
         hard_fault = true;
         Serial.println(F("[FAIL] LittleFS flash mirror mount"));
     } else {
+        g_present |= pb::kFlash;
         Serial.println(F("[PASS] LittleFS flash mirror mounted"));
     }
 
@@ -254,6 +287,7 @@ void runSelftest() {
         hard_fault = true;
         Serial.println(F("[FAIL] radio init (RFM95W did not answer on SPI; power-cycle after fixing)"));
     } else {
+        g_present |= pb::kRadio;
         // The budget comes from the same constants radio.cpp times its transmissions with.
         Serial.printf(
             "[PASS] radio init (RFM95W answers on SPI; SF%d BW%ld kHz CR4/%d: TELEM %.1f ms, "
@@ -268,30 +302,27 @@ void runSelftest() {
         }
     }
 
-    if (!loadcell::tare()) {
-        g_fault_bits |= fault_bits::kHx711;
+    // Last, so the header it writes carries the mask as it now stands. No card: FAIL (ARM
+    // stays refused), but nothing is opened, so the loop never touches the SD again.
+    if (!logging_sd::begin(kFixedMode, g_profile, g_present | pb::kSd)) {
+        g_fault_bits |= fault_bits::kSd;
         hard_fault = true;
-        Serial.println(F("[FAIL] HX711 tare (never asserted DOUT ready)"));
+        Serial.println(F("[FAIL] SD card (mount/open/preallocate): ARM refused; the loop does not "
+                         "touch the SD while it is absent"));
     } else {
-        Serial.println(F("[PASS] HX711 tare"));
+        g_present |= pb::kSd;
+        Serial.printf("[PASS] SD -> %s\n", logging_sd::filename());
     }
 
-    if (!encoders::selftestPresence()) {
-        g_fault_bits |= fault_bits::kEncoder;
-        hard_fault = true;
-        Serial.println(F("[FAIL] encoder I2C presence"));
-    } else {
-        encoders::zero();
-        Serial.println(F("[PASS] encoders present, neutral captured"));
-    }
-
-    // Servo sweep to +-5 deg with encoder confirmation (SPEC 4.3). Direction is checked
-    // against params::servo::sign_x/y, since that is what defines "commanded direction".
+    // Servo sweep to +-5 deg, confirmed by the encoder where there is one (SPEC 4.3).
+    // Direction is checked against params::servo::sign_x/y, since that is what defines
+    // "commanded direction". An axis without an encoder is swept but cannot be confirmed.
     if (!hard_fault) {
         bool servo_ok = true;
         auto sweepCheck = [&](float target_deg, bool is_pitch) {
             servo_drive::writeDeg(is_pitch ? target_deg : 0.0f, is_pitch ? 0.0f : target_deg);
             delay(400);
+            if (!(is_pitch ? enc_p : enc_y)) return;
             encoders::read();
             float measured = is_pitch ? encoders::pitchDeg() : encoders::yawDeg();
             float sign = is_pitch ? static_cast<float>(params::servo::sign_x)
@@ -312,12 +343,24 @@ void runSelftest() {
             g_fault_bits |= fault_bits::kServoSelftest;
             hard_fault = true;
             Serial.println(F("[FAIL] servo sweep: encoder did not confirm commanded direction"));
+        } else if (!enc_p || !enc_y) {
+            Serial.printf("[WARN] servo sweep +-5 deg done, not confirmed on %s%s%s (no encoder)\n",
+                          enc_p ? "" : "pitch", (!enc_p && !enc_y) ? " and " : "",
+                          enc_y ? "" : "yaw");
         } else {
             Serial.println(F("[PASS] servo sweep +-5 deg, both axes"));
         }
     } else {
         Serial.println(F("[SKIP] servo sweep (earlier hard fault)"));
     }
+
+    Serial.printf("       present mask 0x%02X:", g_present);
+    static const struct { uint8_t bit; const char* name; } kNames[] = {
+        {pb::kImu, "IMU"}, {pb::kEncPitch, "encoder-pitch"}, {pb::kEncYaw, "encoder-yaw"},
+        {pb::kLoadCell, "load-cell"}, {pb::kSd, "SD"}, {pb::kFlash, "flash-mirror"},
+        {pb::kRadio, "radio"}};
+    for (const auto& n : kNames) Serial.printf(" %s%s", (g_present & n.bit) ? "" : "NO-", n.name);
+    Serial.println();
 
     bool measure_ok = measureGateOk(/*print_missing=*/true);
     if (!measure_ok) {
@@ -328,6 +371,8 @@ void runSelftest() {
     } else {
         Serial.println(F("[PASS] all STAND_OPEN MEASURE params present"));
     }
+
+    i2c::clearStats();  // probing absent parts failed on purpose; those are not run-time errors
 
     if (hard_fault) {
         Serial.println(F("--- SELFTEST: FAULT (see failures above) ---"));
@@ -358,6 +403,7 @@ void begin() {
 
     loadcell::begin();
     encoders::begin();
+    i2c::begin();
     servo_drive::begin();
     estimator::init();
     g_radio_ok = telemetry::init();
@@ -372,16 +418,23 @@ void begin() {
 void tick(uint32_t loop_us) {
     const uint32_t tick_start_us = micros();
 
-    // Unchanged rule, see loop_stats.h and BRINGUP.md: loop_us is the time since this tick's
-    // scheduled start, so every tick the scheduler starts passes this test.
-    if (countsAsOverrun(loop_us)) {
-        g_fault_bits |= fault_bits::kLoopOverrun;
-        g_loop_overrun_count++;
-    }
-
+    // The sensor reads, each timed on its own so a slow tick can be pinned on one of them. All
+    // I2C in the tick shares a 1 ms budget (i2c_bus.h); parts that were absent at SELFTEST are
+    // not touched.
+    i2c::beginTick();
+    uint32_t t = tick_start_us;
+    auto lap = [&t](int section) {
+        const uint32_t n = micros();
+        g_loop_stats.section(section, n - t);
+        t = n;
+    };
     imu::read();
+    lap(kSecImu);
     loadcell::service();
+    lap(kSecLoadcell);
     encoders::read();
+    lap(kSecEncoders);
+    i2c::endTick();
 
     const uint32_t now = millis();
 
@@ -519,11 +572,21 @@ void tick(uint32_t loop_us) {
         }
     }
 
+    t = micros();
     buildAndLogRecord(loop_us);
+    lap(kSecRecord);
+    t = micros();
     telemetry::onLoopTick();
+    lap(kSecTelemetry);
 
+    // A tick overruns when its body took longer than 3.3 ms to run (loop_stats.h).
+    const uint32_t tick_end_us = micros();
+    if (countsAsOverrun(tick_end_us - tick_start_us)) {
+        g_fault_bits |= fault_bits::kLoopOverrun;
+        g_loop_overrun_count++;
+    }
     constexpr uint32_t kTickUs = protocol::lora::kLoopTickUs;
-    g_loop_stats.record(tick_start_us, micros(), loop_us > kTickUs ? loop_us - kTickUs : 0);
+    g_loop_stats.record(tick_start_us, tick_end_us, loop_us > kTickUs ? loop_us - kTickUs : 0);
 }
 
 // ---- console-invoked commands --------------------------------------------------------
@@ -584,9 +647,11 @@ void cmdSetDryRun(bool on) {
 
 void cmdTare() {
     if (g_state != State::kIdle) { Serial.println(F("TARE only from IDLE")); return; }
-    bool ok = loadcell::tare();
+    // An absent load cell is not polled, and TARE does not go looking for it (a 2 s wait).
+    const bool ok = loadcell::present() ? loadcell::tare() : true;
     encoders::zero();
-    Serial.printf("tare: load cell %s, encoders zeroed\n", ok ? "ok" : "FAILED (check HX711 wiring)");
+    Serial.printf("tare: load cell %s, encoders zeroed\n",
+                  !loadcell::present() ? "absent, skipped" : (ok ? "ok" : "FAILED (check HX711 wiring)"));
     sendEvent(ok ? protocol::EventCode::kTARE_OK : protocol::EventCode::kTARE_FAILED, 0);
 }
 
@@ -602,11 +667,14 @@ bool dryRun() { return g_dry_run; }
 bool armSwitchClosed() { return digitalReadFast(pins::kArmSense) == LOW; }
 uint16_t faultBits() { return g_fault_bits; }
 uint32_t loopOverrunCount() { return g_loop_overrun_count; }
+uint8_t presentMask() { return g_present; }
 
 void cmdClearStats() {
     g_loop_stats.reset();
     telemetry::clearStats();
-    Serial.println(F("stats cleared: loop timing, tx_skipped, tx_timeouts (overruns keep counting)"));
+    i2c::clearStats();
+    Serial.println(F("stats cleared: loop timing, tx_skipped, tx_timeouts, i2c counts "
+                     "(the overrun count keeps counting)"));
 }
 
 int32_t telemetryTMs() {
@@ -631,7 +699,9 @@ void printStatus() {
         "[%s] mode=STAND_OPEN profile=%s dry_run=%d thrust=%.2fN enc=(%.2f,%.2f)deg "
         "arm_sw=%s cont=%s fault_bits=0x%04X overruns=%lu fw=%s "
         "ticks=%lu exec_us_max=%lu period_us_max=%lu behind_us_max=%lu "
-        "exec_hist=%lu,%lu,%lu,%lu,%lu,%lu tx_skipped=%lu tx_timeouts=%lu\n",
+        "exec_hist=%lu,%lu,%lu,%lu,%lu,%lu tx_skipped=%lu tx_timeouts=%lu "
+        "present=0x%02X sec_us_max=%lu,%lu,%lu,%lu,%lu "
+        "i2c_timeouts=%lu,%lu,%lu i2c_errors=%lu,%lu,%lu i2c_skipped=%lu\n",
         stateName(g_state), profileName(g_profile), g_dry_run, loadcell::thrustN(),
         encoders::pitchDeg(), encoders::yawDeg(), armSwitchClosed() ? "CLOSED" : "open",
         continuityOk() ? "OK" : "OPEN", g_fault_bits,
@@ -647,7 +717,19 @@ void printStatus() {
         static_cast<unsigned long>(g_loop_stats.hist(4)),
         static_cast<unsigned long>(g_loop_stats.hist(5)),
         static_cast<unsigned long>(telemetry::txSkipped()),
-        static_cast<unsigned long>(telemetry::txTimeouts()));
+        static_cast<unsigned long>(telemetry::txTimeouts()), g_present,
+        static_cast<unsigned long>(g_loop_stats.sectionMaxUs(kSecImu)),
+        static_cast<unsigned long>(g_loop_stats.sectionMaxUs(kSecLoadcell)),
+        static_cast<unsigned long>(g_loop_stats.sectionMaxUs(kSecEncoders)),
+        static_cast<unsigned long>(g_loop_stats.sectionMaxUs(kSecRecord)),
+        static_cast<unsigned long>(g_loop_stats.sectionMaxUs(kSecTelemetry)),
+        static_cast<unsigned long>(i2c::timeouts(i2c::Bus::kImu)),
+        static_cast<unsigned long>(i2c::timeouts(i2c::Bus::kEncPitch)),
+        static_cast<unsigned long>(i2c::timeouts(i2c::Bus::kEncYaw)),
+        static_cast<unsigned long>(i2c::errors(i2c::Bus::kImu)),
+        static_cast<unsigned long>(i2c::errors(i2c::Bus::kEncPitch)),
+        static_cast<unsigned long>(i2c::errors(i2c::Bus::kEncYaw)),
+        static_cast<unsigned long>(i2c::skipped()));
 }
 
 }  // namespace tvc::flight::sequencer

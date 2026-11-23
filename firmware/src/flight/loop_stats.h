@@ -22,16 +22,19 @@
 // before the stats were cleared.
 namespace tvc::flight {
 
-// The overrun rule exactly as sequencer.cpp has always applied it (SPEC.md Section 4.2 says "any
-// tick exceeds 3.3 ms"). loop_us here is the time since the tick's scheduled start, which is
-// never less than one tick period (3333 us) for a tick that has just been started, so this is
-// true for every tick; see BRINGUP.md "What loop_overrun_count counts". It lives here, unchanged,
-// so a test can pin that down. The fault bit's meaning is not changed.
-inline bool countsAsOverrun(uint32_t loop_us) { return loop_us > 3300; }
+// The overrun rule (SPEC.md Section 4.2: "any tick exceeds 3.3 ms"): a tick whose body took
+// longer than 3300 us to execute, judged when the tick has finished. The fault bit
+// (fault_bits::kLoopOverrun) and the count keep their meaning, "a tick overran"; until now the
+// rule was applied to the time since the tick's scheduled start, which is never under one
+// period (3333 us), so it was true for every tick. See BRINGUP.md "What loop_overrun_count
+// counts".
+inline bool countsAsOverrun(uint32_t exec_us) { return exec_us > 3300; }
 
 class LoopStats {
 public:
     static constexpr int kBins = 6;
+    // Where in the tick time is spent, for finding what makes a slow tick slow.
+    static constexpr int kSections = 5;  // imu, load cell, encoders, log push, telemetry
     // Upper edges (exclusive) of the first five execution-time bins, microseconds; the sixth bin
     // is everything at or above the last edge. 3333 is one tick period at 300 Hz.
     static constexpr uint32_t kEdgesUs[kBins - 1] = {500, 1000, 2000, 3333, 10000};
@@ -43,6 +46,13 @@ public:
         ticks_ = 0;
         exec_max_us_ = period_max_us_ = behind_max_us_ = 0;
         for (auto& h : hist_) h = 0;
+        for (auto& m : section_max_us_) m = 0;
+    }
+
+    // Time one section of the tick took. Called during the tick, before record(), so on the
+    // first tick after a reset (first_ still true) it is ignored like everything else.
+    void section(int i, uint32_t us) {
+        if (!first_ && us > section_max_us_[i]) section_max_us_[i] = us;
     }
 
     // start_us/end_us: micros() at the start and end of the tick body (wraparound is fine).
@@ -73,6 +83,7 @@ public:
     uint32_t periodMaxUs() const { return period_max_us_; }
     uint32_t behindMaxUs() const { return behind_max_us_; }
     uint32_t hist(int i) const { return hist_[i]; }
+    uint32_t sectionMaxUs(int i) const { return section_max_us_[i]; }
 
 private:
     bool first_ = true;
@@ -80,6 +91,7 @@ private:
     uint32_t ticks_ = 0;
     uint32_t exec_max_us_ = 0, period_max_us_ = 0, behind_max_us_ = 0;
     uint32_t hist_[kBins] = {};
+    uint32_t section_max_us_[kSections] = {};
 };
 
 }  // namespace tvc::flight

@@ -36,7 +36,8 @@ struct LogHeader {  // mirrors firmware/src/flight/logging_sd.cpp's LogHeader ex
     char git_hash[20];
     uint8_t mode;
     uint8_t profile;
-    uint8_t reserved0[2];
+    uint8_t present_mask;
+    uint8_t reserved0;
     uint32_t boot_count;
     uint32_t record_size;
 };
@@ -130,6 +131,7 @@ int main(int argc, char** argv) {
     h.mode = static_cast<uint8_t>(Mode::kStandOpen);
     h.profile = static_cast<uint8_t>(profile);
     h.boot_count = 7;
+    h.present_mask = 0x7F;  // synthetic run: every part present
     h.record_size = sizeof(Record);
     std::fwrite(&h, sizeof(h), 1, f);
 

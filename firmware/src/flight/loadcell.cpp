@@ -11,6 +11,7 @@ int32_t g_raw = 0;
 int32_t g_offset = 0;
 float g_thrust_N = 0.0f;
 float g_thrust_peak = 0.0f;
+bool g_present = false;
 }  // namespace
 
 void begin() {
@@ -18,6 +19,17 @@ void begin() {
     pinMode(pins::kHxDout, INPUT_PULLUP);
     digitalWriteFast(pins::kHxSck, LOW);
 }
+
+void setPresent(bool present) {
+    g_present = present;
+    if (!present) {
+        g_raw = 0;
+        g_thrust_N = 0.0f;
+        g_thrust_peak = 0.0f;
+    }
+}
+
+bool present() { return g_present; }
 
 bool ready() { return digitalReadFast(pins::kHxDout) == LOW; }
 
@@ -38,7 +50,7 @@ int32_t readRaw() {
 }
 
 void service() {
-    if (!ready()) return;
+    if (!g_present || !ready()) return;
     g_raw = readRaw();
     g_thrust_N = static_cast<float>(g_raw - g_offset) / params::loadcell::hx_scale_counts_per_n;
     if (g_thrust_N > g_thrust_peak) g_thrust_peak = g_thrust_N;

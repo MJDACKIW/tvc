@@ -237,7 +237,9 @@ the GUI has a checkbox that disables the `burnout` detector so the sequence comp
 `elapsedMicros`-driven fixed-rate loop at `loop_hz` = 300 Hz. Every tick: read IMU, read HX711
 if ready (it is ~80 SPS; use the last value), read both AS5600 encoders, evaluate state machine,
 write SD record. Every 2nd tick (150 Hz exactly): `controller_step` on both axes and servo
-write. Telemetry at 20 Hz from a separate `elapsedMicros`. Measure and log loop overrun count;
+write. All I2C in one tick shares a 1 ms budget and is polled against a deadline
+(`firmware/src/flight/i2c_bus.h`; the Teensy Wire library's own 16 ms and 50 ms waits cannot be
+shortened), and a bus that fails is left alone for 20 ms. Telemetry at 20 Hz from a separate `elapsedMicros`. Measure and log loop overrun count;
 a `STATUS.fault_bits` bit is set if any tick exceeds 3.3 ms. The console `STATUS` line also
 carries each tick's execution time and period maxima, a histogram of execution time, and the
 ticks counted (`firmware/src/flight/loop_stats.h`). What the overrun counter really counts, and
@@ -252,7 +254,15 @@ BOOT → SELFTEST → IDLE → ARMED → COUNTDOWN → IGNITE → BURN → TAILO
 - `SELFTEST`: IMU WHO_AM_I, gyro bias sample (2 s, vehicle still), $R_{B\leftarrow S}$
   determinant check (must be ±1), SD card write test, LittleFS mount, radio init, HX711 tare
   (STAND modes only), encoder read, servo sweep to ±5° and back with encoder confirmation
-  (encoder must move in the commanded direction or fault). Missing `MEASURE` params → fault.
+  (an encoder that answers must move in the commanded direction or fault). Missing `MEASURE`
+  params → fault. The IMU is required. The encoders and the load cell are optional: SELFTEST
+  asks each once and reports an absent one as `WARN`, not `FAIL` (the load cell was dropped
+  from this build; an axis without an encoder is swept but not confirmed). What answered is
+  the **presence mask** (`protocol::present_bits`: IMU, encoder pitch, encoder yaw, load cell,
+  SD, flash mirror, radio), kept until the next SELFTEST. A part whose bit is clear is never
+  polled or written, so a missing one costs the loop nothing; the mask goes into `STATUS` and
+  the SD log header. An absent SD card stays a `FAIL` (ARM is refused) but nothing is opened,
+  so the loop never touches it. ARM does not wait for the load cell or its scale.
 - `IDLE`: accepts uplink `SET_MODE`, `SET_PROFILE`, `TARE`, `ARM`. Requires physical arm switch
   (`ARM_SENSE_PIN`) AND uplink `ARM` to move to `ARMED`.
 - `ARMED`: continuity reported every telemetry packet. Pre-launch tilt > threshold → `SAFE`
@@ -294,6 +304,8 @@ HX_DOUT_PIN     6
 HX_SCK_PIN      7
 RFM95_IRQ       8
 RFM95_RST       9    // MOVED from 24 to free Wire2 for the second encoder — one wire to move
+                     // (AS BUILT the wire is still on 24, which is Wire2 SCL: encoder #2 cannot
+                     // work and firmware leaves Wire2 alone until it moves; see BRINGUP.md)
 RFM95_CS        10
 SPI0 MOSI/MISO/SCK   11/12/13 (fixed)
 PYRO_GATE_PIN   14
@@ -327,7 +339,8 @@ constraining the cells themselves.
 1. **SD primary**: pre-allocated 64 MB binary file, `Record` struct (below) at 300 Hz,
    written from a 12 s RAM ring buffer with `SdFat` and 512-byte aligned blocks. The file is
    opened and pre-allocated in `SELFTEST`, not at ignition. Header contains `params.yaml` hash,
-   mode, profile, firmware git hash, boot count.
+   mode, profile, presence mask (byte 0 of the old reserved pair; 0 in older logs), firmware git
+   hash, boot count.
 2. **LittleFS_Program mirror**: 50 Hz decimated records into the Teensy's program flash
    (1 MB region). Survives SD card ejection/corruption. Dumped over USB post-test with a
    serial command.
@@ -354,7 +367,8 @@ SD (Section 4.6).
 
 **Airtime.** The link runs SF7, CR 4/5, **BW500**. It was BW125, then BW250; 250 kHz stays
 documented as the fallback if 500 kHz costs too much range. RadioHead adds 4 header bytes, so a
-33 B TELEM frame is 37 B on the air and a 48 B STATUS frame is 52 B. 10 Hz TELEM + 1 Hz STATUS:
+33 B TELEM frame is 37 B on the air and a 49 B STATUS frame is 53 B (the same 88 symbols as
+52 B, so the presence byte added to STATUS changed no airtime). 10 Hz TELEM + 1 Hz STATUS:
 
 | bandwidth | TELEM | STATUS | duty |
 |---|---|---|---|
@@ -411,7 +425,7 @@ PID's own `saturated_last`, paper §3.1/Appendix A.3). `arm-switch-closed` (adde
 ground-GUI phase, using a previously reserved bit) is `ARM_SENSE_PIN` read as closed, so the GUI
 can gate `ARM` on it (Section 5).
 
-**STATUS (1 Hz, 42-byte payload).** Existing fields (mode, fault_bits, params hash, SD/flash
+**STATUS (1 Hz, 43-byte payload).** Existing fields (mode, fault_bits, params hash, SD/flash
 bytes, uplink RSSI, boot count, missing-MEASURE list) plus the cumulative fields below, all
 computed and integrated **on the vehicle**, not the ground station, so they are correct even
 across radio packet loss:
@@ -437,8 +451,11 @@ peak_tilt_y           uint16 x100
 fw_git_hash           4 raw bytes  (first 4 bytes of kFirmwareGitHash's hex prefix; the
                                     "-dirty" suffix, if any, is not encoded here — it is still
                                     visible in the SD log header and the USB console)
+present_mask         uint8        (protocol::present_bits, set once at SELFTEST: bit0 IMU, bit1
+                                    encoder pitch, bit2 encoder yaw, bit3 load cell, bit4 SD,
+                                    bit5 flash mirror, bit6 radio; a clear bit = never polled)
 ```
-Total: 1+2+6+4+4+1+2+4+2+1+1+2+2+2+2+2+4 = 42 bytes.
+Total: 1+2+6+4+4+1+2+4+2+1+1+2+2+2+2+2+4+1 = 43 bytes.
 
 **EVENT (5-byte payload, no free-text):** `t_ms int16, event_code uint8, aux int16`. Sent on
 state changes, countdown ticks, and faults; retransmitted 3× (best-effort redundancy against
@@ -689,10 +706,11 @@ lib_deps = greiman/SdFat@^2.2.2
 
 ## 11. Physical measurements still required (blockers for STAND modes)
 
-`HX_OFFSET`/`HX_SCALE`; $R_{B\leftarrow S}$; servo µs/deg and neutral per axis; Kp, Kd, Q, R
+$R_{B\leftarrow S}$; servo µs/deg and neutral per axis; Kp, Kd, Q, R
 (start from Ziegler–Nichols on the stand per paper §3.1, with the sim used to pick Q/R);
 vehicle mass, inertia (bifilar pendulum), $r$ (gimbal pivot to CoM); stand inertia; $C_{N\alpha}$
 from OpenRocket; `power.batt_adc_to_mv` (Section 4.5/4.7 — multimeter on the battery vs. raw
-`BATT_SENSE_PIN` ADC count, taken together). Each is a `MEASURE` in `params.yaml`; the firmware
+`BATT_SENSE_PIN` ADC count, taken together). (`HX_OFFSET`/`HX_SCALE` are no longer on this
+list: the load cell was dropped, and ARM does not wait for its scale.) Each is a `MEASURE` in `params.yaml`; the firmware
 will not arm without them (STAND_OPEN's own required subset is narrower — see
 `measureGateOk()` in `sequencer.cpp`).

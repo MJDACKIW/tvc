@@ -115,17 +115,34 @@ TELEM_FLAG_NAMES = [
     (FLAG_ARM_SWITCH_CLOSED, "arm_switch_closed"),
 ]
 
+# present_bits in protocol.h: which parts answered at SELFTEST (STATUS.present_mask).
+PRESENT_BITS = [
+    (1 << 0, "imu"), (1 << 1, "encoder_pitch"), (1 << 2, "encoder_yaw"),
+    (1 << 3, "load_cell"), (1 << 4, "sd"), (1 << 5, "flash_mirror"), (1 << 6, "radio"),
+]
+
+
+def present_names(mask: int) -> list[str]:
+    """Names of the parts that answered at SELFTEST."""
+    return [name for bit, name in PRESENT_BITS if mask & bit]
+
+
+def absent_names(mask: int) -> list[str]:
+    """Names of the parts that did not answer, so they are never polled."""
+    return [name for bit, name in PRESENT_BITS if not mask & bit]
+
+
 # protocol.h's exact field order/types. '<' = little-endian, no padding (#pragma pack(1)).
 TELEM_FMT = "<hBhhhhhhhhHHBBH"
 TELEM_FIELDS = ["t_ms", "state", "thrust_x10", "xhat_p_x100", "xhat_y_x100", "u_p_x100",
                 "u_y_x100", "enc_p_x100", "enc_y_x100", "gyro_z_x10", "k_p_x1000", "k_y_x1000",
                 "flags", "cont_adc8", "batt_mv"]
-STATUS_FMT = "<BH6sIIbHIHBBHHHHH4s"
+STATUS_FMT = "<BH6sIIbHIHBBHHHHH4sB"
 STATUS_FIELDS = ["mode", "fault_bits", "params_hash6", "sd_bytes_written", "flash_bytes_written",
                  "rssi_last_uplink_dbm", "boot_count", "missing_measure_bits",
                  "loop_overrun_count", "sat_pct_p", "sat_pct_y", "running_iae_p_x100",
                  "running_iae_y_x100", "peak_thrust_x10", "peak_tilt_p_x100",
-                 "peak_tilt_y_x100", "fw_git_hash"]
+                 "peak_tilt_y_x100", "fw_git_hash", "present_mask"]
 EVENT_FMT = "<hBh"
 ACK_FMT = "<HBBH"
 UPLINK_FMT = "<H"          # seq
@@ -141,7 +158,7 @@ PAYLOAD_SIZES = {
     PacketType.ACK: struct.calcsize(ACK_FMT),
 }
 assert PAYLOAD_SIZES[PacketType.TELEM] == 27
-assert PAYLOAD_SIZES[PacketType.STATUS] == 42
+assert PAYLOAD_SIZES[PacketType.STATUS] == 43
 assert PAYLOAD_SIZES[PacketType.EVENT] == 5
 assert PAYLOAD_SIZES[PacketType.ACK] == 6
 
@@ -340,6 +357,8 @@ def decode_status(payload: bytes, tables: Tables | None = None) -> dict:
     local6 = tables.local_hash6 if tables else b""
     d["params_hash_match"] = (local6 == h6) if local6 else None
     d["fw_git_hash_hex"] = d.pop("fw_git_hash").hex()
+    d["present_names"] = present_names(d["present_mask"])
+    d["absent_names"] = absent_names(d["present_mask"])
     bits = d["missing_measure_bits"]
     names = tables.measure_bit_names if tables else {}
     d["missing_measure_names"] = [names.get(i, f"bit{i}") for i in range(32) if bits & (1 << i)]
@@ -447,7 +466,7 @@ def encode_status(*, mode: int, fault_bits: int, params_hash6: bytes, sd_bytes_w
                   missing_measure_bits: int, loop_overrun_count: int, sat_pct_p: int,
                   sat_pct_y: int, running_iae_p_degs: float, running_iae_y_degs: float,
                   peak_thrust_N: float, peak_tilt_p_deg: float, peak_tilt_y_deg: float,
-                  fw_git_hash4: bytes) -> bytes:
+                  fw_git_hash4: bytes, present_mask: int = 0x7F) -> bytes:
     return struct.pack(
         STATUS_FMT, mode, fault_bits & 0xFFFF, bytes(params_hash6[:6]).ljust(6, b"\0"),
         sd_bytes_written & 0xFFFFFFFF, flash_bytes_written & 0xFFFFFFFF,
@@ -455,7 +474,8 @@ def encode_status(*, mode: int, fault_bits: int, params_hash6: bytes, sd_bytes_w
         missing_measure_bits & 0xFFFFFFFF, min(loop_overrun_count, 0xFFFF), sat_pct_p, sat_pct_y,
         to_u16(running_iae_p_degs * 100.0), to_u16(running_iae_y_degs * 100.0),
         to_u16(peak_thrust_N * 10.0), to_u16(peak_tilt_p_deg * 100.0),
-        to_u16(peak_tilt_y_deg * 100.0), bytes(fw_git_hash4[:4]).ljust(4, b"\0"))
+        to_u16(peak_tilt_y_deg * 100.0), bytes(fw_git_hash4[:4]).ljust(4, b"\0"),
+        present_mask & 0xFF)
 
 
 def encode_event(t_ms: int, event_code: int, aux: int = 0) -> bytes:

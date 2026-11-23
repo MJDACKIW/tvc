@@ -17,7 +17,7 @@ void tearDown(void) {}
 // The loop ticks every 3333 us (300 Hz) and asks TxSlots::choose() what to start, with a radio
 // that stays busy for the start-up cost plus the airtime of whatever it was told to send. TELEM
 // slots are on the 100 ms grid from t=0, STATUS slots on every 10th, as in the firmware. Sizes
-// on the air: TELEM 33 + 4 RadioHead bytes, STATUS 48 + 4, EVENT 11 + 4.
+// on the air: TELEM 33 + 4 RadioHead bytes, STATUS 49 + 4, EVENT 11 + 4.
 constexpr uint32_t kPeriodMs = 100;
 constexpr uint32_t kStartCostUs = lora::kTxStartCostUs;
 
@@ -43,7 +43,7 @@ struct Sim {
     // Plan and airtimes for explicit radio settings, derived the way lora_link.h derives them.
     static Sim forBandwidth(long bw_hz, uint64_t first_tick_us) {
         const uint32_t ta = lora::timeOnAirUs(37, 7, bw_hz, 5);
-        const uint32_t sa = lora::timeOnAirUs(52, 7, bw_hz, 5);
+        const uint32_t sa = lora::timeOnAirUs(53, 7, bw_hz, 5);
         const uint32_t ea = lora::timeOnAirUs(15, 7, bw_hz, 5);
         TxPlan plan{kPeriodMs, 10, lora::ceilMs(kStartCostUs + ta),
                     lora::ceilMs(kStartCostUs + sa) + 1, lora::ceilMs(kStartCostUs + ea) + 1};

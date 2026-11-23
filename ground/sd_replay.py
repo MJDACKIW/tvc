@@ -165,7 +165,8 @@ def build_frames(path: Path, telem_hz: float = 10.0, status_hz: float = 1.0,
             missing_measure_bits=missing_bits, loop_overrun_count=overruns,
             sat_pct_p=pct(sat_ticks_p), sat_pct_y=pct(sat_ticks_y), running_iae_p_degs=iae_p,
             running_iae_y_degs=iae_y, peak_thrust_N=peak_thrust, peak_tilt_p_deg=peak_tilt_p,
-            peak_tilt_y_deg=peak_tilt_y, fw_git_hash4=git4))
+            peak_tilt_y_deg=peak_tilt_y, fw_git_hash4=git4,
+            present_mask=header.get("present_mask") or 0x7F))
 
     for i in range(len(r)):
         s = int(state[i])

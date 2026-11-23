@@ -31,7 +31,8 @@ PAYLOADS = (1, 10, 23, 37, 52, 58, 100, 255)
 ANCHORS = {
     (23, 7, 125_000, 5): 61_696,    # LoRaWAN 10 B uplink at SF7: the usual 61.7 ms
     (37, 7, 125_000, 5): 82_176,    # TELEM, 33 B frame + 4 B RadioHead header
-    (52, 7, 125_000, 5): 102_656,   # STATUS, 48 B frame + 4 B header
+    (52, 7, 125_000, 5): 102_656,   # STATUS before the presence byte, 48 B frame + 4 B header
+    (53, 7, 125_000, 5): 102_656,   # STATUS now, 49 B frame + 4 B header: the same 88 symbols
     (37, 7, 250_000, 5): 41_088,
     (52, 7, 250_000, 5): 51_328,
     (37, 7, 500_000, 5): 20_544,
@@ -95,7 +96,7 @@ def test_header_agrees_with_the_anchors(header_values):
 def test_telem_and_status_wire_sizes():
     import telem_codec as tc
     assert la.frame_bytes(tc.PAYLOAD_SIZES[tc.PacketType.TELEM]) == 33
-    assert la.frame_bytes(tc.PAYLOAD_SIZES[tc.PacketType.STATUS]) == 48
+    assert la.frame_bytes(tc.PAYLOAD_SIZES[tc.PacketType.STATUS]) == 49
 
 
 def test_budget_at_the_bandwidths_that_matter():

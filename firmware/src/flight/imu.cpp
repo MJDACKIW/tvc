@@ -4,6 +4,8 @@
 #include <Wire.h>
 
 #include "attitude_from_accel.h"
+#include "i2c_bus.h"
+#include "imu_decode.h"
 #include "params.h"
 #include "pins.h"
 
@@ -65,29 +67,27 @@ void calibrateGyroBias(uint32_t duration_ms) {
     uint32_t n = 0;
     uint32_t t0 = millis();
     while (millis() - t0 < duration_ms) {
-        read();
-        sum[0] += g_gyro_raw[0] + g_gyro_bias_raw[0];  // undo the bias this read() already applied
-        sum[1] += g_gyro_raw[1] + g_gyro_bias_raw[1];
-        sum[2] += g_gyro_raw[2] + g_gyro_bias_raw[2];
-        n++;
+        if (read()) {
+            sum[0] += g_gyro_raw[0] + g_gyro_bias_raw[0];  // undo the bias read() just applied
+            sum[1] += g_gyro_raw[1] + g_gyro_bias_raw[1];
+            sum[2] += g_gyro_raw[2] + g_gyro_bias_raw[2];
+            n++;
+        }
         delay(2);
     }
     if (n == 0) return;
     for (int i = 0; i < 3; i++) g_gyro_bias_raw[i] = static_cast<float>(sum[i] / n);
 }
 
-void read() {
-    Wire.beginTransmission(pins::kMpuAddr);
-    Wire.write(0x3B);  // ACCEL_XOUT_H
-    Wire.endTransmission(false);
-    if (Wire.requestFrom(static_cast<int>(pins::kMpuAddr), 14) != 14) return;
-
+bool read() {
+    // MPU-6050 burst from ACCEL_XOUT_H (0x3B): imu_decode.h has the byte layout and its test.
+    uint8_t raw[kBurstBytes];
+    if (i2c::readRegisters(i2c::Bus::kImu, pins::kMpuAddr, 0x3B, raw, sizeof(raw)) !=
+        i2c::Result::kOk) {
+        return false;
+    }
     int16_t a_sensor[3], g_sensor[3];
-    for (int i = 0; i < 3; i++) a_sensor[i] = (Wire.read() << 8) | Wire.read();
-    Wire.read();
-    Wire.read();  // temperature, discarded
-    for (int i = 0; i < 3; i++) g_sensor[i] = (Wire.read() << 8) | Wire.read();
-
+    decodeBurst(raw, a_sensor, g_sensor);
     applyFrame(a_sensor, g_accel_raw);
     int16_t g_body[3];
     applyFrame(g_sensor, g_body);
@@ -95,6 +95,7 @@ void read() {
         g_gyro_raw[i] =
             static_cast<int16_t>(constrain(g_body[i] - g_gyro_bias_raw[i], -32768, 32767));
     }
+    return true;
 }
 
 const int16_t* gyroRawCounts() { return g_gyro_raw; }

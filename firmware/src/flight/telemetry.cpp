@@ -173,6 +173,7 @@ void sendStatus() {
     sp.peak_tilt_p_x100 = clampToU16(g_peak_tilt_p * 100.0);
     sp.peak_tilt_y_x100 = clampToU16(g_peak_tilt_y * 100.0);
     hexPrefixToBytes(kFirmwareGitHash, sp.fw_git_hash, sizeof(sp.fw_git_hash));
+    sp.present_mask = sequencer::presentMask();
     radio::send(protocol::PacketType::kStatus, reinterpret_cast<const uint8_t*>(&sp), sizeof(sp));
 }
 

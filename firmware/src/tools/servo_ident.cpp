@@ -242,8 +242,13 @@ void setup() {
     while (!Serial && millis() - t0 < 3000) {}
 
     encoders::begin();
-    if (!encoders::selftestPresence()) {
-        Serial.println(F("!! one or both AS5600 encoders did not ACK -- check Wire1/Wire2 wiring"));
+    encoders::probe();
+    if (!encoders::pitchPresent() || !encoders::yawPresent()) {
+        // An absent axis reads 0 deg from here on; this tool needs both to identify the servos.
+        Serial.printf("!! AS5600 encoder(s) not answering: pitch %s, yaw %s -- check Wire1/Wire2 "
+                      "wiring (pin 24 is shared with the radio RST wire on this build)\n",
+                      encoders::pitchPresent() ? "ok" : "ABSENT",
+                      encoders::yawPresent() ? "ok" : "ABSENT");
     }
     encoders::zero();
 

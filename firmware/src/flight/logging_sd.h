@@ -12,9 +12,11 @@
 namespace tvc::flight::logging_sd {
 
 // Opens the next free SF_NNN.BIN, pre-allocates it, and writes the header (params hash, mode,
-// profile, firmware git hash, boot count). Returns false on any mount/open/preallocate
-// failure (caller sets fault_bits::kSd). Call once during SELFTEST, not at ignition.
-bool begin(Mode mode, Profile profile);
+// profile, firmware git hash, boot count, and present_mask: which parts answered at SELFTEST,
+// protocol::present_bits). Returns false on any mount/open/preallocate failure (caller sets
+// fault_bits::kSd). Call once during SELFTEST, not at ignition. With no card nothing is opened,
+// so push() returns at once and the loop pays nothing for the missing SD.
+bool begin(Mode mode, Profile profile, uint8_t present_mask);
 
 // Appends one record to the ring buffer; opportunistically flushes a full chunk to SD. Never
 // blocks on SD I/O unless the ring itself is full (should not happen at the sized capacity).

@@ -8,10 +8,17 @@
 namespace tvc::flight::loadcell {
 
 void begin();               // pinModes; SCK low
+
+// Presence is decided once, in SELFTEST, from whether tare() succeeded. An absent load cell is
+// never polled: service() returns at once and thrustN() stays 0. The default is absent, so
+// nothing reads the HX711 until SELFTEST has found it.
+void setPresent(bool present);
+bool present();
 bool ready();                // true when a new 24-bit sample is available (~80 SPS)
 int32_t readRaw();           // blocking 24-bit read + gain-128/channel-A pulse, sign-extended
 
-// Call every loop tick; no-op unless ready(). Updates rawCounts()/thrustN()/peakThrustN().
+// Call every loop tick; no-op unless the load cell is present and ready(). Updates
+// rawCounts()/thrustN()/peakThrustN().
 void service();
 
 int32_t rawCounts();
