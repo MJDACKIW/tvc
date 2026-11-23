@@ -27,7 +27,10 @@ and, after a FAIL, one `next:` line. No igniter until a clean dry run: use the 1
    init, encoders, servos. A `MEASURE values still unset` WARN is expected until step "MEASURE".
 
 7. **Radio, 60 s:** `./tvc link` with the Feather where it will sit during the fire. Receive-only.
-   PASS is loss under 2%; it also prints RSSI/SNR, CRC errors, and vehicle loop overruns.
+   PASS is loss under 2%; it also prints the airtime budget, RSSI/SNR, CRC errors and vehicle
+   loop overruns. With the Teensy also plugged into this Mac it clears and then reads the
+   vehicle's `loop_us_max`, `tx_skipped` and `tx_timeouts` (console `STATUS` shows them too;
+   `CLEARSTATS` zeroes them).
 
 8. **Ground station:** `./tvc gs --sim` to rehearse, then `./tvc gs --live`.
 
@@ -48,7 +51,7 @@ and, after a FAIL, one `next:` line. No igniter until a clean dry run: use the 1
 | `... is busy: held by <program>` | another program has the port | Close it. `./tvc flash` closes `screen`, `minicom`, `./tvc monitor` itself; close the GUI window by hand. `lsof /dev/cu.usbmodem*` names the holder. |
 | `radio init` FAIL in SELFTEST | RFM95W silent on SPI: wiring, 3.3 V, or RST still on pin 24 | Fix it, then **power-cycle the Teensy**; radio init runs only at boot. |
 | `no TELEM packets` | vehicle off, radio init failed, Feather in bootloader, or the two sides built from different `params.yaml` | Check `./tvc selftest` and `./tvc ports`; `./tvc flash all` after any `params.yaml` edit. |
-| `loss N% (limit 2%)` | weak link, or saturation: 10 Hz TELEM + 1 Hz STATUS at SF7/BW125 is about 90% airtime (computed, not measured) | Read RSSI/SNR; antennas vertical, clear of metal. To test saturation set `telemetry.telem_rate_hz: 5`, then `./tvc flash all` and `./tvc link`. |
+| `loss N% (limit 2%)` | weak link, or saturation: 10 Hz TELEM + 1 Hz STATUS is 92% airtime at SF7/BW125 and 46% at BW250 (computed by `tools/lora_airtime.py`, not measured) | Read RSSI/SNR; antennas vertical, clear of metal. `tx_skipped` above 0 in the link report means saturation. To test it set `telemetry.telem_rate_hz: 5`, then `./tvc flash all` and `./tvc link`. If the duty is above 50% the tool prints the next step (BW500). |
 | `no Python with PyYAML found` | `ground/venv` missing | Step 1. `TVC_PYTHON` overrides the interpreter. |
 
 ## MEASURE
@@ -65,6 +68,13 @@ ARM waits for five values in `params.yaml`: `servo.us_per_deg_x`, `servo.us_per_
   nothing and are never ACKed (SPEC.md 4.7). ABORT works from the USB console only.
 - **Heartbeat loss never goes to SAFE:** `msSinceLastHeartbeat()` has no caller (SPEC.md 4.4, 8).
 - **No hardware watchdog** (see the comment at the top of `sequencer.cpp`).
-- **Radio TX blocks the flight loop**, roughly 80 ms per TELEM by the LoRa formula, with no
-  timeout in RadioHead: an IRQ wire on the wrong pin hangs the vehicle at its first send.
+- **Radio TX is now non-blocking, but only checked on the host.** `radio.cpp` starts a frame and
+  returns, polls for completion, and clears a stuck one after 2x airtime + 10 ms, so a bad IRQ
+  wire costs `tx_timeouts` instead of hanging the vehicle. It compiles for both boards and the
+  airtime maths is tested; nothing has run on hardware yet. `./tvc flash all` then
+  `./tvc link` with the Teensy on USB is the check.
+- **The overrun counter may not mean what it says.** `sequencer.cpp` counts a tick as an overrun
+  when its period is above 3300 us, but ticks come every 3333 us at 300 Hz, so on a reading of
+  the code every tick counts. Use `loop_us_max` until that threshold is decided (SPEC.md 4.2
+  says 3.3 ms; it was left alone here because it is a fault-bit behaviour, not a radio one).
 - **Filter:** firmware runs the 1-state Kalman; paper and sim validated the 2-state. Not merged.

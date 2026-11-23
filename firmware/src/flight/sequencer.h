@@ -41,6 +41,7 @@ void cmdAbort(const char* why);
 void cmdSetProfile(uint8_t index);
 void cmdSetDryRun(bool on);
 void cmdTare();
+void cmdClearStats();  // zero loop_us_max, tx_skipped, tx_timeouts; any state, touches nothing else
 void cmdResetToIdle();  // SAFE -> IDLE
 
 State state();
@@ -50,6 +51,10 @@ bool dryRun();
 bool armSwitchClosed();  // ARM_SENSE_PIN reads closed (input pullup, switch to GND)
 uint16_t faultBits();
 uint32_t loopOverrunCount();
+// Largest loop_us (the period between 300 Hz ticks, 3333 us when on schedule) since boot or the
+// last cmdClearStats(). A frame of radio code that waits shows up here as a period of that
+// length; with a non-blocking radio it should stay near the SD write stalls, not the airtime.
+uint32_t loopUsMax();
 
 // ms since ignition, negative pre-launch (SPEC.md Section 4.7's TELEM/EVENT t_ms): counts down
 // to 0 during COUNTDOWN (the scheduled ignition instant), counts up from 0 from IGNITE onward,

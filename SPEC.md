@@ -142,7 +142,7 @@ telemetry:
   rate_hz: 20
   lora_freq_mhz: 915.0
   lora_sf: 7
-  lora_bw_khz: 125
+  lora_bw_khz: 250        # 125 until the first bench link test (Section 4.7, airtime)
   lora_cr: 5
   tx_power_dbm: 13
 logging:
@@ -345,9 +345,24 @@ Framing on both radio and USB: `0xAA 0x55 | len | type | payload | crc16`, littl
 throughout. `len` counts payload bytes only (max 48, one byte); `crc16` is CRC-16/CCITT-FALSE
 (same polynomial and init value as `firmware/src/flight/record.h`'s `crc16()`, but computed
 over `len ++ type ++ payload`, not the payload alone) and is 2 bytes. Max payload 48 bytes fits
-one LoRa frame at SF7/BW125 with margin; ~5.5 kbps usable ⇒ 20 Hz × ~60 B ≈ 9.6 kbps is **too
-much**, which is why downlink is 10 Hz `TELEM` + 1 Hz `STATUS` rather than one packet at 20 Hz.
-Full rate stays on SD (Section 4.6).
+one LoRa frame with margin. 20 Hz × ~60 B ≈ 9.6 kbps is **too much** for the channel, which is why
+downlink is 10 Hz `TELEM` + 1 Hz `STATUS` rather than one packet at 20 Hz. Full rate stays on
+SD (Section 4.6).
+
+**Airtime.** The link runs SF7, CR 4/5, **BW250** (it was BW125; the first bench link test at
+125 kHz lost a third of the TELEM frames). RadioHead adds 4 header bytes, so a 33 B TELEM frame
+is 37 B on the air and a 48 B STATUS frame is 52 B. Time on air is 82.2 ms and 102.7 ms at
+BW125 (10 Hz + 1 Hz is 92.4% of every second) and **41.1 ms and 51.3 ms at BW250 (46.2%)**.
+`tools/lora_airtime.py` prints the table from `params.yaml`; `--bw 500` shows the next step
+(23.1%) without changing anything. EVENT (3 copies each), ACK and the 2 Hz HEARTBEAT uplink
+share the channel on top of that, so the working limit is 50% for TELEM + STATUS.
+
+**Transmit never blocks the flight loop.** `radio::send()` starts the transmitter and returns;
+the TX-done interrupt ends it; `radio::busy()` is polled each tick and clears a transmission
+whose interrupt never came (2x airtime + 10 ms). A TELEM that falls due while a frame is still
+on the air is skipped and counted (`tx_skipped` on the USB console), never queued. STATUS and
+EVENT copies that find the radio busy stay due and go out on the first free tick, so STATUS is
+not starved by the TELEM that falls due in the same millisecond every whole second.
 
 **TELEM (10 Hz, 27-byte payload).** Every field int16/uint16 unless noted:
 ```
@@ -440,7 +455,9 @@ all of this; the vehicle firmware still dispatches only HEARTBEAT from radio.
 
 ### 4.8 Feather M0 bridge
 Stateless: LoRa ↔ USB CDC, same framing both directions, appends RSSI/SNR to each downlink
-frame. Uses RadioHead `RH_RF95` with CS 8 / INT 3 / RST 4. No logic lives here.
+frame. Uses RadioHead `RH_RF95` with CS 8 / INT 3 / RST 4. No logic lives here. Its LoRa settings
+come from `params.yaml` through `protocol/lora_link.h`, the same `configure()` call the vehicle
+makes, so the two radios cannot be set differently; flash both after editing `telemetry.*`.
 
 ---
 

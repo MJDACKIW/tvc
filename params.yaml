@@ -54,7 +54,9 @@ telemetry:
   status_rate_hz: 1         # before the link-budget math in 4.7 split it into TELEM + STATUS)
   lora_freq_mhz: 915.0
   lora_sf: 7
-  lora_bw_khz: 125
+  lora_bw_khz: 250          # was 125: 10 Hz TELEM + 1 Hz STATUS was about 92% airtime at 125 kHz.
+                            # Both radios apply this through protocol/lora_link.h, so they
+                            # cannot disagree. Run tools/lora_airtime.py for the budget.
   lora_cr: 5
   tx_power_dbm: 13
 logging:

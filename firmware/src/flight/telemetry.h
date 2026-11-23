@@ -20,13 +20,28 @@ bool init();
 // (STATUS) and caches K/gate/saturation (TELEM) for the next send.
 void onControlTick(const estimator::ShadowOut& pitch, const estimator::ShadowOut& yaw);
 
-// Call every loop-rate (300 Hz) tick (SPEC 4.2). Polls for uplink frames, services pending
-// EVENT retransmits, and sends TELEM/STATUS when their timers are due. Most calls do none of
-// the sends; this is cheap to call unconditionally.
+// Call every loop-rate (300 Hz) tick (SPEC 4.2). Polls for uplink frames, then starts at most
+// one transmission: TELEM when its timer is due, otherwise a pending EVENT copy, otherwise
+// STATUS when its timer is due. Nothing here waits for the radio, and nothing is queued behind
+// a frame in flight:
+//  - a TELEM that falls due while a frame is still on the air is skipped and counted
+//    (txSkipped()); the next one comes a period later;
+//  - an EVENT copy or a STATUS that finds the radio busy simply stays due and goes out on the
+//    first tick after the radio is free (it is rebuilt from live state at that moment, so it
+//    is never stale). Without that, STATUS would lose to the TELEM that falls due in the same
+//    millisecond at every whole second and never be sent.
+// Most calls do no send at all; this is cheap to call unconditionally.
 void onLoopTick();
 
-// Sends an EVENT frame immediately and schedules two retransmits (SPEC 4.7: "retransmitted
-// 3x"), serviced from onLoopTick(). event_code values: protocol/event_codes.h.
+// Schedules an EVENT frame for now and two retransmits at +150 ms and +300 ms (SPEC 4.7:
+// "retransmitted 3x"), all sent from onLoopTick() as the radio frees up; the first copy goes
+// out inside this call if the radio is idle. event_code values: protocol/event_codes.h.
 void onEvent(uint8_t event_code, int16_t aux);
+
+// TELEM frames skipped because a frame was still in flight when they fell due, and stuck
+// transmissions cleared by the radio's timeout, since boot or the last clearStats().
+uint32_t txSkipped();
+uint32_t txTimeouts();
+void clearStats();
 
 }  // namespace tvc::flight::telemetry

@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <stddef.h>
 
+#include "lora_link.h"
 #include "params.h"
 #include "protocol.h"
 
@@ -71,11 +72,9 @@ void setup() {
         while (1) {
         }
     }
-    g_rf95.setFrequency(tvc::params::telemetry::lora_freq_mhz);
-    g_rf95.setTxPower(static_cast<int8_t>(tvc::params::telemetry::tx_power_dbm), false);
-    g_rf95.setSpreadingFactor(static_cast<uint8_t>(tvc::params::telemetry::lora_sf));
-    g_rf95.setSignalBandwidth(static_cast<long>(tvc::params::telemetry::lora_bw_khz) * 1000L);
-    g_rf95.setCodingRate4(static_cast<uint8_t>(tvc::params::telemetry::lora_cr));
+    // The same call the vehicle makes (flight/radio.cpp), so frequency, SF, BW, CR, power and
+    // preamble come from params.yaml through one function and cannot differ between the ends.
+    tvc::protocol::lora::configure(g_rf95);
 }
 
 void loop() {

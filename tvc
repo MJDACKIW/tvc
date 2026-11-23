@@ -340,7 +340,9 @@ STATUS_RE = re.compile(
     r"^\[(?P<state>[A-Z_]+)\] mode=(?P<mode>\S+) profile=(?P<profile>\S+) dry_run=(?P<dry>\d) "
     r"thrust=(?P<thrust>\S+)N enc=\((?P<ep>\S+),(?P<ey>\S+)\)deg arm_sw=(?P<arm>\S+) "
     r"cont=(?P<cont>\S+) fault_bits=0x(?P<faults>[0-9A-Fa-f]+) overruns=(?P<overruns>\d+)"
-    r"(?: fw=(?P<fw>\S+))?")
+    r"(?: fw=(?P<fw>\S+))?"
+    r"(?: loop_us_max=(?P<loop_us_max>\d+) tx_skipped=(?P<tx_skipped>\d+) "
+    r"tx_timeouts=(?P<tx_timeouts>\d+))?")
 BANNER_FW_RE = re.compile(r"firmware ready\. fw=(\S+)")
 
 
@@ -356,6 +358,9 @@ def query_status(con: Console, timeout: float = 3.0, tries: int = 3) -> dict | N
                 d = m.groupdict()
                 d["faults"] = int(d["faults"], 16)
                 d["overruns"] = int(d["overruns"])
+                for key in ("loop_us_max", "tx_skipped", "tx_timeouts"):
+                    if d.get(key) is not None:
+                        d[key] = int(d[key])
                 return d
     return None
 
@@ -855,7 +860,97 @@ def measure_link(dev: str, seconds: float, r: Results) -> dict | None:
     }
 
 
-def report_link(res: dict, r: Results, limit_pct: float = 2.0) -> bool:
+NOMINAL_TICK_US = 3333      # 300 Hz loop; params.yaml control.loop_hz
+LOOP_STALL_WARN_US = 10_000  # three missed ticks; a TX that blocks shows up as its whole airtime
+
+
+def open_vehicle_console(r: Results, override: str | None) -> "Console | None":
+    """The Teensy's USB console for the loop counters, or None (with an INFO line saying why).
+    The radio part of the test needs only the Feather, so a missing Teensy is not a failure:
+    a range test usually runs the vehicle on its battery."""
+    dev = override or os.environ.get("TVC_TEENSY_PORT")
+    if not dev:
+        teensy, _ = find_boards()
+        if len(teensy) != 1:
+            r.info("no single Teensy on USB, so vehicle loop timing and skipped-TX counts are "
+                   "not read (plug it into this Mac, or send STATUS in ./tvc monitor teensy)")
+            return None
+        dev = teensy[0].device
+    holders = port_holders(dev)
+    if holders:
+        r.info(f"{dev} is held by {holders[0][1]} (pid {holders[0][0]}): vehicle loop timing "
+               "and skipped-TX counts are not read")
+        return None
+    try:
+        return Console(dev)
+    except OSError as exc:
+        r.info(f"could not open {dev} ({exc}): vehicle loop timing is not read")
+        return None
+
+
+def start_vehicle_window(con: "Console", r: Results) -> bool:
+    """CLEARSTATS so loop_us max and the TX counters cover only this test, not the boot SELFTEST."""
+    con.ser.reset_input_buffer()
+    con._buf = b""
+    con.send("CLEARSTATS")
+    _, ok = con.collect(lambda ln: "stats cleared" in ln, 2.0)
+    if not ok:
+        r.warn("the Teensy did not answer CLEARSTATS, so loop_us max may include boot-time stalls",
+               "reflash it with ./tvc flash teensy (older firmware has no CLEARSTATS)")
+    return ok
+
+
+def report_airtime_budget(r: Results) -> None:
+    sys.path.insert(0, str(REPO / "tools"))
+    import lora_airtime as la
+    s = la.load_settings()
+    b = la.budget(s["sf"], s["bw_khz"], s["cr"], s["telem_hz"], s["status_hz"])
+    t, st = b["rows"]["TELEM"], b["rows"]["STATUS"]
+    msg = (f"airtime budget (params.yaml): SF{s['sf']} BW{s['bw_khz']} kHz, TELEM "
+           f"{t['air_us'] / 1000:.1f} ms + STATUS {st['air_us'] / 1000:.1f} ms, downlink duty "
+           f"{b['duty_pct']:.1f}%")
+    if b["duty_pct"] > la.DUTY_LIMIT_PCT:
+        r.warn(msg, "ground/venv/bin/python tools/lora_airtime.py shows the next step")
+    else:
+        r.info(msg)
+
+
+def report_vehicle(vehicle: dict, res: dict, r: Results) -> None:
+    """Loop timing and TX counters the Teensy reported over USB after the test window."""
+    if vehicle.get("loop_us_max") is None:
+        r.warn("this firmware does not report loop_us_max / tx_skipped",
+               "reflash: ./tvc flash teensy")
+        return
+    peak = vehicle["loop_us_max"]
+    line = (f"vehicle loop: longest tick period {peak} us (nominal {NOMINAL_TICK_US} us), "
+            f"{vehicle['tx_skipped']} TELEM skipped while a frame was on the air, "
+            f"{vehicle['tx_timeouts']} stuck TX cleared")
+    if peak > LOOP_STALL_WARN_US:
+        sys.path.insert(0, str(REPO / "tools"))
+        import lora_airtime as la
+        s = la.load_settings()
+        telem_ms = la.budget(s["sf"], s["bw_khz"], s["cr"], s["telem_hz"],
+                             s["status_hz"])["rows"]["TELEM"]["air_us"] / 1000
+        r.warn(line, f"something held the flight loop for {peak / 1000:.0f} ms. One TELEM "
+               f"frame is {telem_ms:.0f} ms on air: if the stall is about that long the board "
+               "still runs the old blocking radio code (./tvc flash teensy); otherwise look at "
+               "SD writes (logging_sd.cpp), or a SELFTEST run inside the window")
+    else:
+        r.info(line)
+    if vehicle["tx_timeouts"]:
+        r.warn(f"{vehicle['tx_timeouts']} transmissions never reported done and were cleared by "
+               "the timeout",
+               "check the RFM95W IRQ wire on pin 8 and its 3.3 V supply")
+    if vehicle["tx_skipped"]:
+        expected = max(1.0, res["telem_expected"])
+        r.warn(f"{vehicle['tx_skipped']} TELEM frames ({100.0 * vehicle['tx_skipped'] / expected:.1f}%) "
+               "were skipped because the radio was still sending: the channel is saturated",
+               "ground/venv/bin/python tools/lora_airtime.py shows the duty cycle and the next "
+               "bandwidth step")
+
+
+def report_link(res: dict, r: Results, limit_pct: float = 2.0,
+                vehicle: dict | None = None) -> bool:
     c = res["counts"]
     el = res["elapsed"]
     got = c["TELEM"]
@@ -888,7 +983,9 @@ def report_link(res: dict, r: Results, limit_pct: float = 2.0) -> bool:
     if len(res["overruns"]) >= 2 and res["overruns"][-1] > res["overruns"][0]:
         r.warn(f"the vehicle's loop-overrun count rose by "
                f"{res['overruns'][-1] - res['overruns'][0]} during the test",
-               "radio transmit blocks the flight loop (see BRINGUP.md, known gaps)")
+               "see the vehicle loop line below for the longest tick, and BRINGUP.md, known gaps")
+    if vehicle is not None:
+        report_vehicle(vehicle, res, r)
     return r.ok
 
 
@@ -903,11 +1000,23 @@ def cmd_link(args) -> int:
         r.failed(f"{dev} is busy: held by {name} (pid {pid})",
                  "close that program (the ground station holds the port too), then retry")
         return 1
-    r.info(f"listening on {dev} for {args.seconds:.0f} s; this sends nothing")
-    res = measure_link(dev, args.seconds, r)
+    r.info(f"listening on {dev} for {args.seconds:.0f} s; this sends nothing over the radio")
+    report_airtime_budget(r)
+    con = open_vehicle_console(r, args.teensy_port)
+    if con is not None:
+        start_vehicle_window(con, r)  # only text on the Teensy's own USB console
+    try:
+        res = measure_link(dev, args.seconds, r)
+        vehicle = query_status(con) if (con is not None and res is not None) else None
+    finally:
+        if con is not None:
+            con.close()
     if res is None:
         return 1
-    ok = report_link(res, r)
+    if con is not None and vehicle is None:
+        r.warn("the Teensy console did not answer STATUS after the test",
+               "run STATUS in ./tvc monitor teensy to read loop_us_max and tx_skipped")
+    ok = report_link(res, r, vehicle=vehicle)
     print()
     print("LINK PASSED" if ok else "LINK FAILED")
     return 0 if ok else 1
@@ -1203,6 +1312,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     lk = sub.add_parser("link", help="receive-only radio test through the Feather")
     lk.add_argument("--port")
+    lk.add_argument("--teensy-port", help="Teensy USB console, for loop_us max and TX counters "
+                                          "(found automatically if one Teensy is plugged in)")
     lk.add_argument("--seconds", type=float, default=60.0)
 
     g = sub.add_parser("gs", help="launch the ground station")

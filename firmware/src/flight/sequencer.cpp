@@ -12,6 +12,7 @@
 #include "loadcell.h"
 #include "logging_flash.h"
 #include "logging_sd.h"
+#include "lora_link.h"
 #include "params.h"
 #include "pins.h"
 #include "profiles.h"
@@ -50,6 +51,7 @@ uint16_t g_fire_token = 0;
 bool g_fire_confirmed = false;
 
 uint32_t g_loop_overrun_count = 0;
+uint32_t g_loop_us_max = 0;  // largest tick period seen (the loop_us the Record logs), us
 uint32_t g_tick_count = 0;  // for the 300 Hz / 150 Hz split
 
 float g_ol_pitch_delta = 0.0f, g_ol_yaw_delta = 0.0f;  // open-loop actuator state (applied)
@@ -251,7 +253,18 @@ void runSelftest() {
         hard_fault = true;
         Serial.println(F("[FAIL] radio init (RFM95W did not answer on SPI; power-cycle after fixing)"));
     } else {
-        Serial.println(F("[PASS] radio init (RFM95W answers on SPI)"));
+        // The budget comes from the same constants radio.cpp times its transmissions with.
+        Serial.printf(
+            "[PASS] radio init (RFM95W answers on SPI; SF%d BW%ld kHz CR4/%d: TELEM %.1f ms, "
+            "STATUS %.1f ms on air, downlink duty %.1f%% at %d Hz + %d Hz)\n",
+            protocol::lora::kSf, protocol::lora::kBwHz / 1000, protocol::lora::kCrDenominator,
+            protocol::lora::kTelemAirUs / 1000.0, protocol::lora::kStatusAirUs / 1000.0,
+            protocol::lora::kDownlinkDutyPermille / 10.0, params::telemetry::telem_rate_hz,
+            params::telemetry::status_rate_hz);
+        if (protocol::lora::kDownlinkDutyPermille > 500) {
+            Serial.println(F("[WARN] radio duty is above 50%: expect skipped TELEM frames "
+                             "(tools/lora_airtime.py shows the next bandwidth step)"));
+        }
     }
 
     if (!loadcell::tare()) {
@@ -356,6 +369,7 @@ void begin() {
 }
 
 void tick(uint32_t loop_us) {
+    if (loop_us > g_loop_us_max) g_loop_us_max = loop_us;
     if (loop_us > 3300) {
         g_fault_bits |= fault_bits::kLoopOverrun;
         g_loop_overrun_count++;
@@ -581,6 +595,13 @@ bool dryRun() { return g_dry_run; }
 bool armSwitchClosed() { return digitalReadFast(pins::kArmSense) == LOW; }
 uint16_t faultBits() { return g_fault_bits; }
 uint32_t loopOverrunCount() { return g_loop_overrun_count; }
+uint32_t loopUsMax() { return g_loop_us_max; }
+
+void cmdClearStats() {
+    g_loop_us_max = 0;
+    telemetry::clearStats();
+    Serial.println(F("stats cleared: loop_us_max, tx_skipped, tx_timeouts (overruns keep counting)"));
+}
 
 int32_t telemetryTMs() {
     if (g_state == State::kCountdown) {
@@ -602,11 +623,15 @@ estimator::ShadowOut shadowYaw() { return g_shadow_y; }
 void printStatus() {
     Serial.printf(
         "[%s] mode=STAND_OPEN profile=%s dry_run=%d thrust=%.2fN enc=(%.2f,%.2f)deg "
-        "arm_sw=%s cont=%s fault_bits=0x%04X overruns=%lu fw=%s\n",
+        "arm_sw=%s cont=%s fault_bits=0x%04X overruns=%lu fw=%s "
+        "loop_us_max=%lu tx_skipped=%lu tx_timeouts=%lu\n",
         stateName(g_state), profileName(g_profile), g_dry_run, loadcell::thrustN(),
         encoders::pitchDeg(), encoders::yawDeg(), armSwitchClosed() ? "CLOSED" : "open",
         continuityOk() ? "OK" : "OPEN", g_fault_bits,
-        static_cast<unsigned long>(g_loop_overrun_count), kFirmwareGitHash);
+        static_cast<unsigned long>(g_loop_overrun_count), kFirmwareGitHash,
+        static_cast<unsigned long>(g_loop_us_max),
+        static_cast<unsigned long>(telemetry::txSkipped()),
+        static_cast<unsigned long>(telemetry::txTimeouts()));
 }
 
 }  // namespace tvc::flight::sequencer

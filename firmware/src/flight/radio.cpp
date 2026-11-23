@@ -5,6 +5,7 @@
 #include <SPI.h>
 #include <string.h>
 
+#include "lora_link.h"
 #include "params.h"
 #include "pins.h"
 
@@ -18,6 +19,19 @@ uint32_t g_last_heartbeat_ms = 0;
 bool g_any_heartbeat = false;
 bool g_radio_ok = false;  // rf95.init() succeeded; every send/receive below is skipped if not
 
+bool g_tx_in_flight = false;
+uint32_t g_tx_start_us = 0;
+uint32_t g_tx_timeout_us = 0;
+uint32_t g_tx_timeouts = 0;
+
+// A healthy TX ends within a few hundred microseconds of its airtime. Twice the airtime plus
+// 10 ms leaves room for that without letting a dead IRQ line hold the radio for long.
+constexpr uint32_t kTxTimeoutMarginUs = 10000;
+
+constexpr uint32_t txTimeoutUs(uint8_t payload_len) {
+    return 2 * protocol::lora::frameTimeOnAirUs(payload_len) + kTxTimeoutMarginUs;
+}
+
 }  // namespace
 
 bool begin() {
@@ -28,21 +42,35 @@ bool begin() {
     digitalWrite(pins::kRfm95Rst, HIGH);
     delay(10);
 
+    g_tx_in_flight = false;
     g_radio_ok = g_rf95.init();
     if (!g_radio_ok) return false;
-    g_rf95.setFrequency(params::telemetry::lora_freq_mhz);
-    g_rf95.setTxPower(static_cast<int8_t>(params::telemetry::tx_power_dbm), false);
-    g_rf95.setSpreadingFactor(static_cast<uint8_t>(params::telemetry::lora_sf));
-    g_rf95.setSignalBandwidth(static_cast<long>(params::telemetry::lora_bw_khz) * 1000L);
-    g_rf95.setCodingRate4(static_cast<uint8_t>(params::telemetry::lora_cr));
+    protocol::lora::configure(g_rf95);
     return true;
 }
 
-bool send(tvc::protocol::PacketType type, const uint8_t* payload, uint8_t payload_len) {
-    // RadioHead's waitPacketSent() below has no timeout: without a working module the TX-done
-    // interrupt never fires and this call would block the whole flight loop forever.
-    if (!g_radio_ok) return false;
-    if (payload_len > tvc::protocol::kMaxPayload) return false;
+bool busy() {
+    if (!g_tx_in_flight) return false;
+    // The TX-done interrupt runs RH_RF95::handleInterrupt(), which sets the mode back to idle.
+    if (g_rf95.mode() != RHGenericDriver::RHModeTx) {
+        g_tx_in_flight = false;
+        return false;
+    }
+    if (micros() - g_tx_start_us > g_tx_timeout_us) {
+        g_rf95.setModeIdle();  // abandon the stuck frame; the transmitter is switched off
+        g_tx_in_flight = false;
+        g_tx_timeouts++;
+        return false;
+    }
+    return true;
+}
+
+SendResult send(tvc::protocol::PacketType type, const uint8_t* payload, uint8_t payload_len) {
+    if (!g_radio_ok) return SendResult::kRadioDown;
+    if (payload_len > tvc::protocol::kMaxPayload) return SendResult::kOversize;
+    // RadioHead's own send() calls waitPacketSent(), which spins until the TX-done interrupt
+    // and has no timeout. busy() is false here, so that wait is already over and never runs.
+    if (busy()) return SendResult::kBusy;
 
     uint8_t frame[tvc::protocol::kHeaderLen + tvc::protocol::kMaxPayload + tvc::protocol::kCrcLen];
     frame[0] = tvc::protocol::kSyncByte0;
@@ -56,12 +84,18 @@ bool send(tvc::protocol::PacketType type, const uint8_t* payload, uint8_t payloa
     frame[4 + payload_len + 1] = static_cast<uint8_t>((crc >> 8) & 0xFF);
 
     size_t total = tvc::protocol::frameLen(payload_len);
-    if (!g_rf95.send(frame, total)) return false;
-    g_rf95.waitPacketSent();
-    return true;
+    // RH_RF95::send() returns once the transmitter is started. It only fails on an oversize
+    // frame, which the checks above rule out, so a false here means the module is not
+    // answering: report it as down for this call and leave nothing marked in flight.
+    if (!g_rf95.send(frame, total)) return SendResult::kRadioDown;
+    g_tx_start_us = micros();
+    g_tx_timeout_us = txTimeoutUs(payload_len);
+    g_tx_in_flight = true;
+    return SendResult::kStarted;
 }
 
 bool pollUplink() {
+    // available() returns false while the radio is transmitting, so this cannot cut a TX short.
     if (!g_radio_ok || !g_rf95.available()) return false;
 
     uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
@@ -92,5 +126,9 @@ int8_t lastUplinkRssiDbm() { return g_last_uplink_rssi; }
 uint32_t msSinceLastHeartbeat() {
     return g_any_heartbeat ? (millis() - g_last_heartbeat_ms) : UINT32_MAX;
 }
+
+uint32_t txTimeouts() { return g_tx_timeouts; }
+
+void clearStats() { g_tx_timeouts = 0; }
 
 }  // namespace tvc::flight::radio

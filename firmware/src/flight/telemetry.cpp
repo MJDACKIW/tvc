@@ -14,13 +14,14 @@
 #include "protocol.h"
 #include "radio.h"
 #include "sequencer.h"
+#include "tx_slots.h"
 
 namespace tvc::flight::telemetry {
 namespace {
 
 constexpr uint32_t kTelemPeriodMs = 1000u / params::telemetry::telem_rate_hz;
 constexpr uint32_t kStatusPeriodMs = 1000u / params::telemetry::status_rate_hz;
-constexpr int kMaxPendingEvents = 6;  // headroom for a few EVENTs' retransmits overlapping
+constexpr int kMaxPendingEvents = 9;  // 3 copies per EVENT, so up to 3 EVENTs overlapping
 
 // ---- latest control-tick snapshot (150 Hz), read by the next 10 Hz TELEM send ----
 float g_xhat_p = 0, g_xhat_y = 0, g_u_p = 0, g_u_y = 0;
@@ -32,7 +33,8 @@ double g_iae_p = 0, g_iae_y = 0;  // integral of |x_hat| dt, deg*s
 float g_peak_tilt_p = 0, g_peak_tilt_y = 0;
 uint32_t g_control_ticks = 0, g_sat_ticks_p = 0, g_sat_ticks_y = 0;
 
-uint32_t g_next_telem_ms = 0, g_next_status_ms = 0;
+// Which frame starts on which tick, and the skipped-TELEM count (tx_slots.h has the rules).
+TxSlots g_slots(kTelemPeriodMs, kStatusPeriodMs);
 
 struct PendingEvent {
     uint32_t due_ms;
@@ -53,9 +55,27 @@ uint16_t clampToU16(double v) {
     return static_cast<uint16_t>(v);
 }
 
-void sendEventPayload(const protocol::EventPayload& payload) {
-    radio::send(protocol::PacketType::kEvent, reinterpret_cast<const uint8_t*>(&payload),
-                sizeof(payload));
+radio::SendResult sendEventPayload(const protocol::EventPayload& payload) {
+    return radio::send(protocol::PacketType::kEvent, reinterpret_cast<const uint8_t*>(&payload),
+                       sizeof(payload));
+}
+
+bool eventDue(uint32_t now_ms) {
+    for (const auto& p : g_pending) {
+        if (p.live && static_cast<int32_t>(now_ms - p.due_ms) >= 0) return true;
+    }
+    return false;
+}
+
+// Sends each EVENT copy that is due, one per call at most (the first start makes the radio
+// busy). A copy that finds the radio busy stays pending and is tried again next tick. One the
+// radio cannot take at all (down, or oversize) is dropped: retrying would never help.
+void servicePendingEvents(uint32_t now_ms) {
+    for (auto& p : g_pending) {
+        if (!p.live || static_cast<int32_t>(now_ms - p.due_ms) < 0) continue;
+        if (sendEventPayload(p.payload) == radio::SendResult::kBusy) return;
+        p.live = false;
+    }
 }
 
 // bits[i] matches core/measure_bits.json's entry for the same params::measure_bits::* index,
@@ -126,6 +146,7 @@ void sendTelem() {
     if (sequencer::armSwitchClosed()) tp.flags |= protocol::telem_flags::kArmSwitchClosed;
     tp.cont_adc8 = continuityAdc8();
     tp.batt_mv = battMv();
+    // Only called when busy() was false a moment ago, so this starts the frame and returns.
     radio::send(protocol::PacketType::kTelem, reinterpret_cast<const uint8_t*>(&tp), sizeof(tp));
 }
 
@@ -163,7 +184,7 @@ bool init() {
     g_iae_p = g_iae_y = 0;
     g_peak_tilt_p = g_peak_tilt_y = 0;
     g_control_ticks = g_sat_ticks_p = g_sat_ticks_y = 0;
-    g_next_telem_ms = g_next_status_ms = millis();
+    g_slots.reset(millis());
     for (auto& p : g_pending) p.live = false;
     return radio_ok;
 }
@@ -200,23 +221,19 @@ void onControlTick(const estimator::ShadowOut& pitch, const estimator::ShadowOut
 void onLoopTick() {
     radio::pollUplink();
 
-    uint32_t now = millis();
-
-    for (auto& p : g_pending) {
-        if (p.live && static_cast<int32_t>(now - p.due_ms) >= 0) {
-            sendEventPayload(p.payload);
-            p.live = false;
-        }
-    }
-
-    if (static_cast<int32_t>(now - g_next_telem_ms) >= 0) {
-        g_next_telem_ms += kTelemPeriodMs;
-        sendTelem();
-    }
-
-    if (static_cast<int32_t>(now - g_next_status_ms) >= 0) {
-        g_next_status_ms += kStatusPeriodMs;
-        sendStatus();
+    const uint32_t now = millis();
+    switch (g_slots.choose(now, radio::busy(), eventDue(now))) {
+        case TxChoice::kTelem:
+            sendTelem();
+            break;
+        case TxChoice::kEvent:
+            servicePendingEvents(now);
+            break;
+        case TxChoice::kStatus:
+            sendStatus();
+            break;
+        case TxChoice::kNone:
+            break;
     }
 }
 
@@ -226,18 +243,26 @@ void onEvent(uint8_t event_code, int16_t aux) {
     payload.event_code = event_code;
     payload.aux = aux;
 
-    sendEventPayload(payload);  // send immediately
-
-    uint32_t now = millis();
+    const uint32_t now = millis();
     int scheduled = 0;
     for (auto& p : g_pending) {
-        if (!p.live && scheduled < 2) {  // 2 retransmits -> 3 total, per SPEC.md Section 4.7
+        if (!p.live && scheduled < 3) {  // 3 copies total, per SPEC.md Section 4.7
             p.live = true;
             p.payload = payload;
-            p.due_ms = now + 150u * (scheduled + 1);
+            p.due_ms = now + 150u * scheduled;  // now, +150 ms, +300 ms
             scheduled++;
         }
     }
+    servicePendingEvents(now);  // the first copy goes out here if the radio is idle
+}
+
+uint32_t txSkipped() { return g_slots.telemSkipped(); }
+
+uint32_t txTimeouts() { return radio::txTimeouts(); }
+
+void clearStats() {
+    g_slots.clearSkipped();
+    radio::clearStats();
 }
 
 }  // namespace tvc::flight::telemetry

@@ -32,7 +32,8 @@ void printHelp() {
         " ABORT               abort to SAFE from any state\n"
         " RESET               SAFE -> IDLE\n"
         " DUMP_FLASH          hex-dump the LittleFS mirror over serial\n"
-        " STATUS / ?          one-line status\n"
+        " STATUS / ?          one-line status (loop_us_max, tx_skipped, tx_timeouts at the end)\n"
+        " CLEARSTATS          zero loop_us_max, tx_skipped and tx_timeouts; any state\n"
         " HELP / H            this text\n"));
 }
 
@@ -87,6 +88,8 @@ void handleLine(char* line) {
         logging_flash::dumpHexOverSerial();
     } else if (strcmp(cmd, "RESET") == 0) {
         sequencer::cmdResetToIdle();
+    } else if (strcmp(cmd, "CLEARSTATS") == 0) {
+        sequencer::cmdClearStats();
     } else if (strcmp(cmd, "STATUS") == 0 || strcmp(cmd, "?") == 0) {
         sequencer::printStatus();
     } else if (strcmp(cmd, "HELP") == 0 || strcmp(cmd, "H") == 0) {
