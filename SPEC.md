@@ -32,8 +32,9 @@ tvc/
 ├── params.yaml                  # SINGLE SOURCE OF TRUTH for every number shared by sim and firmware
 ├── tools/
 │   ├── gen_params.py            # params.yaml -> core/params.h AND sim/tvc_params.py
-│   ├── decode_log.py            # binary SD log -> CSV/npz + plots (extend the existing one)
+│   ├── decode_log.py            # binary SD log -> CSV/npz (sim/vehicle.py's load_stand_log schema) + plots
 │   ├── iae_compare.py           # measured static-fire attitude vs sim prediction, IAE metric
+│   ├── synth_sd_log.py          # made-up SD log built from the real record.h/core/, for the tools and GUI
 │   └── parity_test.py           # proves sim and firmware core produce identical outputs
 ├── core/                        # PURE C++, no Arduino/Teensy headers. Compiled into BOTH firmware and sim.
 │   ├── params.h                 # GENERATED — do not edit by hand
@@ -61,11 +62,14 @@ tvc/
 │   └── requirements.txt
 ├── sim/
 │   ├── tvc_params.py            # GENERATED
-│   ├── vehicle.py                # rigid-body dynamics, thrust curve, aero disturbance (paper §6.1, §3.4.2)
+│   ├── tvc_core.py               # the one ctypes bridge to core/ (run_sim, serve and parity_test all use it)
+│   ├── vehicle.py                # Vehicle / LegacyVehicle / StandVehicle: dynamics, thrust curve, aero (Section 3.5)
 │   ├── sensors.py                # MPU-6050 noise model, gravity-tilt measurement (paper §6.7, §6.11)
 │   ├── run_sim.py                # closed-loop RK4 @ 1 ms, control @ 150 Hz; uses core via ctypes
-│   ├── serve.py                  # run_sim.py --serve: virtual vehicle on a TCP socket for gs.py --sim
-│   ├── figures/                  # regenerates paper Figs 2–11 (existing plots may be ported here)
+│   ├── serve.py                  # run_sim.py --serve: virtual vehicle on a TCP socket for gs.py --sim,
+│   │                             #   on the SAME Vehicle/StandVehicle and tvc_core controller as run_sim
+│   ├── serve_sensors.py          # serve.py's raw-count IMU, load cell and encoder (sigmas from sim_overrides)
+│   ├── figures/                  # run_sim.py output (.npz + PNG), gitignored: regenerate, never commit
 │   └── data/estes_e12.eng       # NAR thrust curve points
 ├── protocol/
 │   ├── protocol.h                # packet structs (C)
@@ -99,12 +103,15 @@ control:
   max_deflection_deg: 10.0   # paper §2.2: ±10° command limit (mechanical hard stop is 12°, verified in CAD)
   integral_clamp_deg_s: 5.0  # anti-windup: |integral| clamp, and freeze integration while saturated
 kalman:
-  q: MEASURE              # process noise variance, deg^2 per step
+  q_angle: MEASURE        # angle process noise density, deg^2/s per step (2-state filter, Section 3.1)
+  q_rate: MEASURE         # gyro bias process noise density, (deg/s)^2/s per step
   r: MEASURE              # accel tilt measurement variance, deg^2
-  p0: 1.0
+  p0_angle: 25.0          # deg^2: P0 = diag(p0_angle, p0_bias), seeded by controller_init (Section 3.1)
+  p0_bias: 0.01           # (deg/s)^2
   accel_gate_g: [0.6, 1.4]   # |a| outside this band -> skip update step (gyro-only); paper §6.7 behaviour
 servo:
   slew_deg_per_s: 500.0   # 60°/0.12 s, paper §3.3
+  tau_s: MEASURE          # first-order lag time constant, s (Section 3.3); step-response test
   us_per_deg_x: MEASURE   # linkage geometry — from servo_ident tool
   us_per_deg_y: MEASURE
   neutral_us_x: MEASURE
@@ -119,10 +126,17 @@ vehicle:
   l_cop_minus_com_m: 0.080          # paper §2.6: CoP ≈ 80 mm ahead of CoM (positive = destabilising)
   diameter_m: 0.0762
   cn_alpha_per_rad: MEASURE         # Barrowman, from OpenRocket
+loadcell:
+  hx_scale_counts_per_n: MEASURE    # raw HX711 counts per Newton (optional hardware: dropped from this build)
 motor:
   name: "Estes E12-4"
   thrust_curve_file: "sim/data/estes_e12.eng"
   burn_time_s: 2.44                 # paper §6.2
+stand:                              # 2-DOF static test-stand rig (Section 3.5, run_sim.py --stand)
+  inertia_kg_m2: MEASURE            # vehicle + gimbal plate about the stand pivot (bifilar)
+  friction_coulomb_Nm: MEASURE      # dry friction torque at the pivot, opposes motion
+  friction_viscous_Nm_s: MEASURE    # rate-proportional friction torque at the pivot
+  arm_pivot_to_gimbal_m: MEASURE    # stand pivot to gimbal distance (replaces r_gimbal_to_com_m)
 staging:
   launch_accel_g: 2.0               # sustained axial accel threshold
   launch_accel_window_s: 0.05       # must persist this long
@@ -139,7 +153,8 @@ pyro:
   continuity_ok_max_adc: 3800
   heartbeat_timeout_ms: 1000
 telemetry:
-  rate_hz: 20
+  telem_rate_hz: 10       # Section 4.7 link-budget math split the old single rate_hz into TELEM + STATUS
+  status_rate_hz: 1
   lora_freq_mhz: 915.0
   lora_sf: 7
   lora_bw_khz: 500        # 125, then 250, now 500 (Section 4.7, airtime); 250 is the fallback
@@ -149,7 +164,23 @@ logging:
   sd_rate_hz: 300
   ring_seconds: 12
   flash_mirror_rate_hz: 50
+power:
+  batt_adc_to_mv: MEASURE           # resistor-divider scale, mV per raw ADC count (Section 4.5)
+sim_overrides:                      # sim-only stand-ins for the MEASURE values above; see below
+  ...
 ```
+
+This block is a snapshot of `params.yaml`'s shape, not a second source: `params.yaml` and its
+comments are authoritative, and `tools/gen_params.py` is what reads it.
+
+`sim_overrides` is NOT measured hardware. It holds the numbers `sim/run_sim.py` and
+`sim/serve.py` use in place of the `vehicle.*`, `control.*`, `kalman.*`, `servo.tau_s` and
+`stand.*` fields that are still `MEASURE` (mass, inertia, moment arm, C_Nalpha, the paper's
+own gains and noise values, sensor noise, and a self-contained `legacy_physics` mirror of the
+paper script's constants). `gen_params.py` writes it into `sim/tvc_params.py` and
+deliberately leaves it out of `core/params.h`: firmware must never see paper or estimated
+numbers as if they were measured. One consequence: the sim and the GUI `--sim` read the same
+block, so they cannot disagree about the vehicle.
 
 Generator rules: `MEASURE` becomes `constexpr float X = NAN;` plus an entry in a
 `kMeasureList[]` that the firmware checks at boot. Any NaN in the list that is required for the
@@ -226,11 +257,15 @@ so a real share of it went to $\hat b$ instead. That wrong bias then contaminate
 dead reckoning for the rest of the burn (the gate stays closed), producing true-angle drift
 of several degrees under sensor noise -- a state-estimator artifact of the paper's
 zero-initialized filter meeting a realistic gate, not a `core/` bug. Giving the bias state
-much lower initial uncertainty removes this specific mechanism (verified: `diagnose_estimator`'s
-gate misattribution component drops from ~2.4 deg to ~0 deg of the baseline's steady-state
-drift); a smaller residual (~0.5 deg) remains from gyro white noise integrated over the long
-predict-only stretch, which is intrinsic to gyro-only dead reckoning and not fixable by
-initialization. See `sim/run_sim.py`'s `diagnose_estimator` output for the full account.
+much lower initial uncertainty removes the bias misattribution. Measured on the baseline
+(`run_sim.py baseline`, corrected physics, theta0 = 5 deg, seed 42, noise on): the mean true
+angle over t in [1.5, 2.4] s went from -2.97 deg before the P0 change to -0.54 deg after it.
+The baseline still does NOT enter the 5% settling band within the burn (the reported 2.440 s
+is the end of the burn, not a settling time). The residual is gyro white noise integrated
+while the accelerometer gate is closed; `diagnose_estimator` variant (c), which pins
+`bias_hat` to 0, gives -0.52 deg against -0.54 deg as-is, so bias is no longer the cause.
+That is evidence for the gyro-noise reading, not a proof of it: nothing has isolated the
+gyro noise term on its own. See `sim/run_sim.py`'s `diagnose_estimator` output.
 
 ### 3.2 PID (paper §3.1 eq5, Appendix A.3)
 
@@ -655,8 +690,9 @@ at real time for demoing without hardware, and a `--sim` flag that connects to
 - The controller is `core/` via ctypes (`libtvccore.dylib` built by `make -C core native` with
   clang). A pure-Python fallback is **not** allowed in the main path; it may exist only inside
   `parity_test.py` as a reference.
-- `sensors.py`: gyro white noise + bias, accel white noise + vibration term proportional to
-  thrust, per MPU-6050 datasheet values (paper §6.7, §6.11). Seeded.
+- `sensors.py`: gyro white noise + bias, accel white noise (angle-equivalent), post-burnout gyro
+  drift, flat in thrust, seeded (paper §6.7, §6.11). A vibration term proportional to thrust
+  is NOT implemented, here or in `serve_sensors.py`: it is an open refinement.
 - Scenarios reproducing paper figures: `baseline` (5° tip-off), `open_loop`, `disturbance`
   (0.12 N·m for 50 ms at 0.6 s), `sensitivity`, `controllability_map`, `monte_carlo` (100
   trials, θ₀ ∈ [0.5°, 6°], thrust ±8%). Each writes `.npz` + PNG with the params hash.
@@ -666,6 +702,11 @@ at real time for demoing without hardware, and a `--sim` flag that connects to
   and reads back servo commands; the dynamics then use the *vehicle's* command, closing the
   loop through real firmware timing.
 - `--serve`: exposes the same telemetry framing on a local TCP socket for the GUI's `--sim`.
+  `serve.py` is not a second model: its plant is `Vehicle` (free flight) or `StandVehicle`
+  (`STAND_CLOSED`), one instance per axis, its controller is `tvc_core.ControllerAxis`, its
+  parameters are `sim_overrides`, and its accelerometer gate is driven by the vehicle's true
+  axial specific force exactly as in `run_simulation`. Only the instruments (raw-count IMU,
+  load cell, encoder, `serve_sensors.py`) and the sequencer are its own.
 
 ### 6.1 Parity test (`tools/parity_test.py`)
 Generates a fixed 3 s trace of (gyro, accel_tilt, gate) at 150 Hz, runs it through
@@ -696,7 +737,7 @@ lets the paper say the flight and simulation controllers are identical. Run it i
 |---|---|---|
 | Unit | `pio test -e native` on `core/` | KF converges on synthetic data; PID clamps and anti-windup behave; slew limiter never exceeds 500°/s |
 | Parity | `tools/parity_test.py` | bitwise equal |
-| Sim | `run_sim.py baseline` | settles < 0.3 s, saturation ≈ 1% of burn, matches paper Table 1 within 10% |
+| Sim | `run_sim.py baseline` | **OPEN, not met.** Was "settles < 0.3 s, saturation ≈ 1% of burn, matches paper Table 1 within 10%". Measured: the baseline never enters the 5% band within the burn (2.440 s is the burn end); with perfect state feedback it settles in 0.358 s, so 0.3 s is out of reach with these gains and this plant even with a perfect estimator. |
 | Bench SIM_ONBOARD | Teensy runs onboard model, GUI live over radio | GUI plots show recovery from injected 5° offset; no loop overruns; three logs present and consistent |
 | HIL | `run_sim.py --hil` | measured servo response matches slew model; loop timing verified with encoder |
 | Radio | 30 min soak at 10 Hz at the intended stand distance | packet loss < 2%, heartbeat never times out |

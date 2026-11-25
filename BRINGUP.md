@@ -51,8 +51,9 @@ and, after a FAIL, one `next:` line. No igniter until a clean dry run: use the 1
    `>> IGNITE`, the LED on for about 0.8 s, `>> BURN`, `>> TAILOFF`, `>> SAFE` about 4 s after T-0.
    `RESET` returns to IDLE; Ctrl-C leaves the monitor. ARM is refused while MEASURE values are unset.
 
-10. **Readiness:** `./tvc ready`. Step 9 is MANUAL by design, and the Kalman line is permanently
-    RED until the sim branch is merged. Exit 0 only when nothing is RED or MANUAL.
+10. **Readiness:** `./tvc ready`. Step 9 is MANUAL by design, and the RFM95 reset line stays RED
+    until the wire is on pin 9 and `kRfm95Rst = 9` in `pins.h` (it is read from that file, so it
+    clears by itself). Exit 0 only when nothing is RED or MANUAL.
 
 ## If X fails
 
@@ -99,7 +100,11 @@ ARM waits for four values in `params.yaml`: `servo.us_per_deg_x`, `servo.us_per_
   thrust above 1 N (`kThrustDetectN`) and aborts as a misfire after `kNoIgnitionMs`; an absent
   load cell reads 0 N. Dry runs are unaffected (they skip that check). Something else has to
   detect ignition before a live run.
-- **Filter:** firmware runs the 1-state Kalman; paper and sim validated the 2-state. Not merged.
+- **Shadow estimator only, and MEASURE until tuned.** The firmware runs the same 2-state Kalman,
+  PID and servo model as the sim (`core/`, seeded by `controller_init` exactly as the sim seeds
+  it), but in STAND_OPEN it only estimates: the open-loop profile drives the servos. Its
+  `kalman.q_angle`, `q_rate`, `r` and `servo.tau_s` are `MEASURE`, so `xhat` and `u` in the log
+  are NaN until the stand tuning pass.
 
 ## Per-tick blocking audit
 

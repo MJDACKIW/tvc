@@ -55,8 +55,9 @@ BUILD_INPUTS = [
 # Vehicle states in which flashing or re-running SELFTEST must not happen.
 LIVE_STATES = {"ARMED", "COUNTDOWN", "IGNITE", "BURN", "TAILOFF"}
 
-PERMANENT_RED = ("Firmware runs 1-state Kalman; paper/sim validated 2-state. "
-                 "Merge pending.")
+PINS_H = REPO / "firmware" / "src" / "flight" / "pins.h"
+# The wire a pin is moved to when it clashes with encoder #2 (SPEC.md Section 4.5).
+RFM95_RST_TARGET_PIN = 9
 
 DOUBLE_TAP = ("double-tap the Feather's RESET button (two taps within half a second, the "
               "LED then pulses slowly), then run this command again right away")
@@ -1222,6 +1223,26 @@ def measure_values() -> dict[str, bool]:
     return out
 
 
+def rfm95_rst_conflict() -> str | None:
+    """A RED line while pins.h puts the RFM95 reset on one of Wire2's pins (encoder #2).
+    Read from pins.h, so it clears the moment kRfm95Rst is moved, and not before. None if the
+    constants cannot be read: a checklist must not crash on a file it does not own."""
+    try:
+        text = PINS_H.read_text()
+        pin = {name: int(re.search(rf"\b{name}\s*=\s*(\d+)", text).group(1))
+               for name in ("kRfm95Rst", "kWire2Scl", "kWire2Sda")}
+    except (OSError, AttributeError, ValueError):
+        return None
+    if pin["kRfm95Rst"] == pin["kWire2Scl"]:
+        wire = "SCL"
+    elif pin["kRfm95Rst"] == pin["kWire2Sda"]:
+        wire = "SDA"
+    else:
+        return None
+    return (f"RFM95 RST on {pin['kRfm95Rst']} conflicts with encoder #2 (Wire2 {wire}). "
+            f"Move wire to {RFM95_RST_TARGET_PIN} and set kRfm95Rst = {RFM95_RST_TARGET_PIN}.")
+
+
 def cmd_ready(args) -> int:
     gates: list[tuple[str, str, str | None]] = []
 
@@ -1349,8 +1370,10 @@ def cmd_ready(args) -> int:
                    "the dry-run sequence (BRINGUP.md step 9) and confirm the LED pulses once "
                    "and the state ends at SAFE")
 
-    # permanent
-    gate("RED", PERMANENT_RED)
+    # 8. the radio reset wire shares a pin with encoder #2's I2C bus
+    clash = rfm95_rst_conflict()
+    if clash:
+        gate("RED", clash)
 
     reds = sum(1 for c, _, _ in gates if c == "RED")
     manual = sum(1 for c, _, _ in gates if c == "MANUAL")
