@@ -29,6 +29,10 @@ Usage:
     python sim/run_sim.py legacy_check   # the 1% controller-port parity check
     python sim/run_sim.py all            # corrected-physics scenarios; old script vs new
                                           # sim report, no tuning toward paper Table 1
+    python sim/run_sim.py --serve [--mode STAND_CLOSED] [--port N] ...
+                                          # not a scenario: the virtual vehicle behind
+                                          # ground/gs.py --sim (sim/serve.py, same Vehicle,
+                                          # StandVehicle and tvc_core controller as above)
 """
 import argparse
 import math
@@ -934,6 +938,14 @@ def cmd_report():
 
 
 def main():
+    # --serve is the GUI's virtual vehicle (sim/serve.py), not a scenario: hand every other
+    # argument to its own CLI before this one's scenario parser sees them. ground/gs.py --sim
+    # spawns `run_sim.py --serve --port N ...`, so this has to stay a plain flag anywhere in argv.
+    if "--serve" in sys.argv[1:]:
+        import serve
+        serve.main([a for a in sys.argv[1:] if a != "--serve"])
+        return
+
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("scenario", choices=[

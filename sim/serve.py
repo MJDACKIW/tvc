@@ -6,17 +6,29 @@ RSSI/SNR trailer; bare uplink frames back), framed by protocol/telem_codec.py.
 Behaviour follows firmware/src/flight/sequencer.cpp + telemetry.cpp (states, transitions,
 thresholds, t_ms, EVENT 3x retransmit, TELEM/STATUS rates) plus the SPEC 4.3/4.7 pieces the
 firmware doesn't have yet: every SPEC 4.1 mode, radio uplink dispatch with ACKs, and heartbeat
-loss -> SAFE. Plant: sim/vehicle.py; sensors: sim/sensors.py; controller: core/ via ctypes.
+loss -> SAFE.
+
+One vehicle model and one controller, the same ones sim/run_sim.py's scenarios use:
+  plant       sim/vehicle.py: Vehicle (free flight, corrected physics) or StandVehicle
+              (STAND_CLOSED), one instance per axis because Vehicle.rk4_step advances its own
+              axial velocity (a shared instance would integrate it twice per step)
+  controller  sim/tvc_core.py ControllerAxis, i.e. core/ via ctypes: 2-state Kalman, PID, servo
+              lag + slew, initialised with controller_init exactly as the Teensy does
+  parameters  params.yaml sim_overrides (the same block run_sim.py reads), never the MEASURE
+              fields, so the GUI sim and run_sim.py cannot disagree about the vehicle
+  instruments sim/serve_sensors.py (raw-count IMU, load cell, encoder); noise sigmas come from
+              sim_overrides.sensors
+The accelerometer gate is driven by the vehicle's true axial specific force, as run_sim.py does
+(SPEC.md Section 3.1), not by the noisy simulated accelerometer counts.
 
   STAND_OPEN                 stand locked; open-loop profile (firmware profiles.cpp shapes)
                              drives the gimbal in BURN; the shadow controller only estimates
   STAND_CLOSED               stand pivot free, closed loop from gate-high (SPEC 4.3)
   SIM_ONBOARD / HIL / FLIGHT closed loop, free flight: the accelerometer sees thrust, not
-                             gravity, once airborne, so the gate drops it (paper 6.7)
+                             gravity, once the motor is lit, so the gate drops it (paper 6.7)
 
-params.yaml values still marked MEASURE are replaced by SERVE_PLACEHOLDERS (printed at start)
-for the simulation only. STATUS.missing_measure_bits still reports params.yaml as it stands,
-since that is what a vehicle built from it would report.
+STATUS.missing_measure_bits still reports params.yaml as it stands, since that is what a
+vehicle built from it would report.
 """
 from __future__ import annotations
 
@@ -29,6 +41,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -37,33 +50,17 @@ REPO_ROOT = SIM_DIR.parent
 sys.path.insert(0, str(REPO_ROOT / "protocol"))
 
 import telem_codec as tc  # noqa: E402
+import tvc_core  # noqa: E402
 import tvc_params as P  # noqa: E402
-from core_ffi import Axis, ControlParams  # noqa: E402
-from sensors import Imu, LoadCell, encoder  # noqa: E402
-from vehicle import AxisDynamics, ThrustCurve  # noqa: E402
+from serve_sensors import Imu, LoadCell, encoder  # noqa: E402
+from vehicle import StandVehicle, Vehicle  # noqa: E402
 
+# The only value the GUI sim still invents: nothing in the plant or controller reads it. It is
+# here so a future battery-voltage readout built on the ADC scale has a number to show.
 SERVE_PLACEHOLDERS = {
-    # paper simulation values (simulation/config.py KP, KD, MOI, MOMENT_ARM, ROCKET_MASS)
-    "control.kp": 8.5,
-    "control.kd": 1.2,
-    "vehicle.inertia_pitch_kg_m2": 0.0231,
-    "vehicle.inertia_yaw_kg_m2": 0.0231,
-    "vehicle.r_gimbal_to_com_m": 0.288,
-    "vehicle.mass_kg": 0.661,
-    # picked for this sim, not tuned (the paper's Kalman was a 2-state filter; core's is scalar).
-    # Kept slow on purpose: core's PID differentiates x_hat (SPEC 3.2), so every accel update
-    # step K*(z - x_hat) reaches the servo as Kd*K*(z - x_hat)/dt; with K ~ 0.1 the vibration
-    # noise alone drives u to the +-10 deg rails every tick.
-    "kalman.q": 0.0005,
-    "kalman.r": 2.0,
-    # so the GUI's battery readout has something to show; a 2S pack
     "power.batt_adc_to_mv": 1.0,
 }
-SIM_BATT_MV = 7600
-# Stand pivot Coulomb friction for STAND_CLOSED. SPEC 6 makes this a MEASURE parameter (default
-# 0) that params.yaml doesn't have yet; without some, the free pivot keeps turning forever after
-# burnout. Sim placeholder.
-SIM_PIVOT_FRICTION_NM = 0.01
+SIM_BATT_MV = 7600  # a 2S pack
 
 S = {name: i for i, name in enumerate(tc.STATE_NAMES)}
 M = {name: i for i, name in enumerate(tc.MODE_NAMES)}
@@ -89,11 +86,40 @@ HX711_HZ = 80.0
 PHYS_DT = 0.001
 
 
-def param(section: str, key: str) -> float:
-    v = getattr(getattr(P, section), key)
-    if isinstance(v, float) and math.isnan(v):
-        return SERVE_PLACEHOLDERS[f"{section}.{key}"]
-    return v
+def placeholders_in_use() -> dict[str, float]:
+    """SERVE_PLACEHOLDERS entries whose params.yaml field is still MEASURE (NaN)."""
+    used = {}
+    for key, value in SERVE_PLACEHOLDERS.items():
+        section, name = key.split(".", 1)
+        v = getattr(getattr(P, section), name)
+        if isinstance(v, float) and math.isnan(v):
+            used[key] = value
+    return used
+
+
+def make_controller() -> tvc_core.ControllerAxis:
+    """One axis' controller, built from the same fields run_sim.py's run_simulation uses:
+    sim_overrides for what is still MEASURE, params.yaml proper for the rest, and the
+    asymmetric P0 through core's controller_init."""
+    ov, ctl = P.sim_overrides, P.control
+    return tvc_core.ControllerAxis(
+        dt=1.0 / ctl.rate_hz, kp=ov.control.kp, ki=ctl.ki, kd=ov.control.kd,
+        integral_clamp=ctl.integral_clamp_deg_s, max_deflection=ctl.max_deflection_deg,
+        q_angle=ov.kalman.q_angle, q_rate=ov.kalman.q_rate, r=ov.kalman.r,
+        slew_deg_per_s=P.servo.slew_deg_per_s, tau_s=ov.servo.tau_s,
+        p0_angle=P.kalman.p0_angle, p0_bias=P.kalman.p0_bias)
+
+
+def make_plants(stand: bool):
+    """(pitch, yaw) plants, two separate instances. Vehicle.rk4_step advances the instance's
+    own axial velocity, so one shared Vehicle would integrate it twice per physics step; both
+    instances see the same thrust and so compute the same velocity."""
+    ov = P.sim_overrides
+    if stand:
+        return (StandVehicle(ov.stand, P.motor), StandVehicle(ov.stand, P.motor))
+    yaw_ov = SimpleNamespace(**{**vars(ov.vehicle),
+                                "inertia_pitch_kg_m2": ov.vehicle.inertia_yaw_kg_m2})
+    return (Vehicle(ov.vehicle, P.vehicle, P.motor), Vehicle(yaw_ov, P.vehicle, P.motor))
 
 
 def missing_measure_bits(tables: tc.Tables) -> int:
@@ -145,13 +171,8 @@ class VirtualVehicle:
         self.tables = tables or tc.Tables.load(REPO_ROOT)
         self.rng = np.random.default_rng(seed)
         self.link_rng = np.random.default_rng(seed + 1)
-        self.cp = ControlParams(
-            dt=1.0 / P.control.rate_hz, kp=param("control", "kp"), ki=P.control.ki,
-            kd=param("control", "kd"), integral_clamp=P.control.integral_clamp_deg_s,
-            max_deflection=P.control.max_deflection_deg, q=param("kalman", "q"),
-            r=param("kalman", "r"), slew_deg_per_s=P.servo.slew_deg_per_s)
-        self.mass = param("vehicle", "mass_kg")
-        self.thrust_curve = ThrustCurve()
+        tvc_core.build()
+        self.ctrl_dt = 1.0 / P.control.rate_hz
         self.theta0, self.stand_tilt = theta0, stand_tilt
         self.disturbance = disturbance  # (t after ignition s, torque N*m, duration s), pitch
         self.arm_switch_closed = arm_switch_closed
@@ -175,7 +196,9 @@ class VirtualVehicle:
         self.records = 0
         self._pending_events: list[tuple[float, bytes]] = []
         self._last_beep = -1e9
-        self.imu = Imu(self.rng)
+        sens = P.sim_overrides.sensors
+        self.imu = Imu(self.rng, sens.gyro_noise_std_dps, sens.accel_noise_std_deg,
+                       sens.gyro_drift_rate_dps_per_s)
         self.loadcell = LoadCell(self.rng)
         # STATUS cumulative fields: since boot, like telemetry.cpp (peak thrust resets at ARM)
         self.iae = [0.0, 0.0]
@@ -193,12 +216,12 @@ class VirtualVehicle:
         """Fresh plant, estimator, and run bookkeeping (boot, SET_MODE, SAFE -> IDLE)."""
         locked = self.mode == M["STAND_OPEN"]
         th0 = self.stand_tilt if locked else self.theta0
-        friction = SIM_PIVOT_FRICTION_NM if self.mode == M["STAND_CLOSED"] else 0.0
-        self.dyn_p = AxisDynamics(param("vehicle", "inertia_pitch_kg_m2"),
-                                  param("vehicle", "r_gimbal_to_com_m"), th0[0], friction)
-        self.dyn_y = AxisDynamics(param("vehicle", "inertia_yaw_kg_m2"),
-                                  param("vehicle", "r_gimbal_to_com_m"), th0[1], friction)
-        self.ax_p, self.ax_y = Axis(P.kalman.p0), Axis(P.kalman.p0)
+        # STAND_OPEN is locked, so its plant never moves; STAND_CLOSED is the free pivot
+        # (StandVehicle: friction, no aero); everything else is free flight.
+        self.plant_p, self.plant_y = make_plants(stand=self.mode in STAND_MODES)
+        self.theta = [float(th0[0]), float(th0[1])]   # true tilt, deg
+        self.omega = [0.0, 0.0]                       # true rate, deg/s
+        self.ax_p, self.ax_y = make_controller(), make_controller()
         self.out_p = self.out_y = None
         self.delta_cmd = [0.0, 0.0]     # what's written to the servos
         self.delta_phys = [0.0, 0.0]    # where the gimbal actually is
@@ -207,7 +230,6 @@ class VirtualVehicle:
         self.t_below = None
         self.fire_token = None
         self.fire_confirmed = False
-        self.launched = False
         self.thrust_true = 0.0
         self.thrust_meas = 0.0
         self._next_hx = 0.0
@@ -412,11 +434,10 @@ class VirtualVehicle:
                 break
 
         # sensors
-        airborne = self.mode not in STAND_MODES and self.launched
-        sf = self.thrust_true / (self.mass * 9.80665) if airborne else None
-        self.gyro, self.accel = self.imu.sample(self.dyn_p.omega, self.dyn_y.omega,
-                                                self.dyn_p.theta, self.dyn_y.theta,
-                                                self.thrust_true, sf)
+        t_motor = self._t_motor()
+        post_burnout_s = max(0.0, t_motor - self.plant_p.burn_time_s) if t_motor >= 0 else 0.0
+        self.gyro, self.accel = self.imu.sample(self.omega[0], self.omega[1], self.theta[0],
+                                                self.theta[1], post_burnout_s)
         if self.t >= self._next_hx:
             self._next_hx = self.t + 1.0 / HX711_HZ
             self.thrust_meas = self.loadcell.read(self.thrust_true)
@@ -496,14 +517,13 @@ class VirtualVehicle:
 
     def control_tick(self):
         ax, ay, az = self.accel
-        mag = math.sqrt(ax * ax + ay * ay + az * az)
-        gate = P.kalman.accel_gate_g[0] <= mag <= P.kalman.accel_gate_g[1]  # attitude_from_accel.h
+        gate = self._accel_gate_ok()
         tilt_p = math.degrees(math.atan2(ay, az))
         tilt_y = math.degrees(math.atan2(-ax, az))
-        self.out_p = self.ax_p.step(self.gyro[0], tilt_p, gate, self.cp)
-        self.out_y = self.ax_y.step(self.gyro[1], tilt_y, gate, self.cp)
+        self.out_p = SimpleNamespace(**self.ax_p.step(self.gyro[0], tilt_p, gate))
+        self.out_y = SimpleNamespace(**self.ax_y.step(self.gyro[1], tilt_y, gate))
 
-        dt = self.cp.dt
+        dt = self.ctrl_dt
         self.ctrl_ticks += 1
         for i, o in enumerate((self.out_p, self.out_y)):
             self.sat_ticks[i] += int(o.u_raw != o.u_cmd)
@@ -523,24 +543,43 @@ class VirtualVehicle:
 
     # ---- the 1 ms physics step ---------------------------------------------------------------
 
+    def _t_motor(self) -> float:
+        """Seconds since the motor lit (the vehicle plants' time base); -1 while it is not."""
+        if self.t_ignite is None or self.dry_run:
+            return -1.0
+        return self.t - self.t_ignite - IGNITER_DELAY_S
+
+    def _accel_gate_ok(self) -> bool:
+        """The Kalman filter's accelerometer gate, decided as run_sim.py's run_simulation does.
+        Stand: always open (no thrust-masks-gravity effect when the vehicle cannot translate).
+        Free flight: closed to the true axial specific force (thrust minus drag, in g) once the
+        motor is lit, since the accelerometer then reads thrust, not gravity (SPEC.md 3.1)."""
+        if self.mode in STAND_MODES or self._t_motor() < 0.0:
+            return True
+        a_g = self.plant_p.sensed_accel_g(self.thrust_true, self.plant_p.v)
+        return P.kalman.accel_gate_g[0] <= a_g <= P.kalman.accel_gate_g[1]
+
     def physics_step(self):
-        t_motor = (self.t - self.t_ignite - IGNITER_DELAY_S) if (
-            self.t_ignite is not None and not self.dry_run) else -1.0
-        self.thrust_true = self.thrust_curve(t_motor)
-        if self.thrust_true > self.mass * 9.80665:
-            self.launched = True
-        # the servo physically can't outrun its slew rate, whatever it is told
+        t_motor = self._t_motor()
+        self.thrust_true = self.plant_p.thrust_at(t_motor) if t_motor >= 0.0 else 0.0
+        # the servo physically can't outrun its slew rate, whatever it is told. In closed loop
+        # core's delta already carries the servo lag and slew, so this follows it exactly.
         step = P.servo.slew_deg_per_s * PHYS_DT
         self.delta_phys = [slew(self.delta_phys[i], self.delta_cmd[i], step) for i in range(2)]
-        if self.mode == M["STAND_OPEN"]:
-            return  # stand locked: attitude does not move
+        if self.mode == M["STAND_OPEN"] or t_motor < 0.0:
+            return  # stand locked, or the motor is not lit: attitude does not move
+        if self.state in (S["SAFE"], S["FAULT"]) and t_motor > self.plant_p.burn_time_s:
+            return  # run over: Vehicle's aero is unstable, so a coasting plant would diverge
         tau_p = 0.0
         if self.disturbance and self.t_ignite is not None:
             t0, torque, dur = self.disturbance
             if t0 <= self.t - self.t_ignite < t0 + dur:
                 tau_p = torque
-        self.dyn_p.step(PHYS_DT, self.thrust_true, self.delta_phys[0], tau_p)
-        self.dyn_y.step(PHYS_DT, self.thrust_true, self.delta_phys[1])
+        # rk4_step advances (theta, omega) and, for Vehicle, its own axial velocity
+        self.theta[0], self.omega[0] = self.plant_p.rk4_step(
+            t_motor, PHYS_DT, self.theta[0], self.omega[0], self.delta_phys[0], tau_p)
+        self.theta[1], self.omega[1] = self.plant_y.rk4_step(
+            t_motor, PHYS_DT, self.theta[1], self.omega[1], self.delta_phys[1], 0.0)
 
 
 class Server:
@@ -626,6 +665,40 @@ def _stdin_console(v: VirtualVehicle):
               f"continuity_raw={v.continuity_raw} loss={v.loss:g}", flush=True)
 
 
+def main(argv=None):
+    """The --serve CLI. sim/run_sim.py --serve forwards its remaining arguments here, so
+    ground/gs.py --sim and `python3 sim/run_sim.py --serve ...` keep working unchanged."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="run_sim.py --serve", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=5760)
+    ap.add_argument("--mode", default="STAND_OPEN",
+                    choices=["SIM_ONBOARD", "HIL", "STAND_OPEN", "STAND_CLOSED", "FLIGHT"],
+                    help="boot mode (the jumpers); the GUI can change it in IDLE")
+    ap.add_argument("--theta0", type=float, nargs=2, default=[5.0, -2.0], metavar=("PITCH", "YAW"),
+                    help="initial tilt [deg] for closed-loop modes (paper baseline: 5 deg)")
+    ap.add_argument("--disturbance", action="store_true",
+                    help="paper disturbance case: 0.12 N*m pitch torque for 50 ms at 0.6 s")
+    ap.add_argument("--loss", type=float, default=0.0, help="downlink frame loss, 0..1")
+    ap.add_argument("--arm-switch", choices=["closed", "open"], default="closed")
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--speed", type=float, default=1.0, help="x real time")
+    args = ap.parse_args(argv)
+
+    vehicle = VirtualVehicle(
+        mode=args.mode, seed=args.seed, theta0=tuple(args.theta0),
+        arm_switch_closed=args.arm_switch == "closed", loss=args.loss,
+        disturbance=(0.6, 0.12, 0.05) if args.disturbance else None)
+    print(f"[serve] tcp://{args.host}:{args.port}  mode={args.mode}  params {P.PARAMS_HASH[:12]}")
+    print("[serve] plant and controller: params.yaml sim_overrides, same as run_sim.py scenarios")
+    used = placeholders_in_use()
+    if used:
+        print("[serve] still a placeholder: " + ", ".join(f"{k}={v:g}" for k, v in used.items()))
+    print("[serve] Ctrl-C to stop" + ("; type `arm open`, `cont open`, `loss 0.1` to poke it"
+                                     if sys.stdin.isatty() else ""), flush=True)
+    run(vehicle, args.host, args.port, speed=args.speed)
+
+
 class Stepper:
     """The fixed-rate schedule around a VirtualVehicle, one 1 ms physics step per call:
     300 Hz loop tick, 150 Hz control (SPEC 6: "run controller when t >= next_ctrl_t,
@@ -675,3 +748,7 @@ def run(vehicle: VirtualVehicle, host: str = "127.0.0.1", port: int = 5760,
         pass
     finally:
         server.close()
+
+
+if __name__ == "__main__":
+    main()
