@@ -89,8 +89,10 @@ uint32_t missingMeasureBits() {
     };
     mark(params::measure_bits::control_kp, params::control::kp);
     mark(params::measure_bits::control_kd, params::control::kd);
-    mark(params::measure_bits::kalman_q, params::kalman::q);
+    mark(params::measure_bits::kalman_q_angle, params::kalman::q_angle);
+    mark(params::measure_bits::kalman_q_rate, params::kalman::q_rate);
     mark(params::measure_bits::kalman_r, params::kalman::r);
+    mark(params::measure_bits::servo_tau_s, params::servo::tau_s);
     mark(params::measure_bits::servo_us_per_deg_x, params::servo::us_per_deg_x);
     mark(params::measure_bits::servo_us_per_deg_y, params::servo::us_per_deg_y);
     mark(params::measure_bits::servo_neutral_us_x, params::servo::neutral_us_x);
@@ -102,6 +104,11 @@ uint32_t missingMeasureBits() {
     mark(params::measure_bits::vehicle_cn_alpha_per_rad, params::vehicle::cn_alpha_per_rad);
     mark(params::measure_bits::loadcell_hx_scale_counts_per_n,
          params::loadcell::hx_scale_counts_per_n);
+    mark(params::measure_bits::stand_inertia_kg_m2, params::stand::inertia_kg_m2);
+    mark(params::measure_bits::stand_friction_coulomb_Nm, params::stand::friction_coulomb_Nm);
+    mark(params::measure_bits::stand_friction_viscous_Nm_s,
+         params::stand::friction_viscous_Nm_s);
+    mark(params::measure_bits::stand_arm_pivot_to_gimbal_m, params::stand::arm_pivot_to_gimbal_m);
     mark(params::measure_bits::power_batt_adc_to_mv, params::power::batt_adc_to_mv);
     return bits;
 }

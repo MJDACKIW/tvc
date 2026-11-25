@@ -22,14 +22,16 @@ void test_non_measure_values_match_yaml(void) {
 void test_measure_fields_are_nan(void) {
     TEST_ASSERT_TRUE(std::isnan(tvc::params::control::kp));
     TEST_ASSERT_TRUE(std::isnan(tvc::params::control::kd));
-    TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::q));
+    TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::q_angle));
+    TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::q_rate));
     TEST_ASSERT_TRUE(std::isnan(tvc::params::kalman::r));
+    TEST_ASSERT_TRUE(std::isnan(tvc::params::servo::tau_s));
     TEST_ASSERT_TRUE(std::isnan(tvc::params::vehicle::mass_kg));
     TEST_ASSERT_TRUE(std::isnan(tvc::params::loadcell::hx_scale_counts_per_n));
 }
 
 void test_measure_list_names_every_measure_field(void) {
-    TEST_ASSERT_EQUAL_INT(15, tvc::params::kMeasureCount);
+    TEST_ASSERT_EQUAL_INT(21, tvc::params::kMeasureCount);
     bool found_kp = false;
     bool found_hx_scale = false;
     bool found_batt = false;
@@ -53,8 +55,8 @@ void test_measure_list_names_every_measure_field(void) {
 // that's the whole point of generating both from one list (see gen_params.py).
 void test_measure_bits_match_measure_list_order(void) {
     TEST_ASSERT_EQUAL_INT(0, tvc::params::measure_bits::control_kp);
-    TEST_ASSERT_EQUAL_INT(13, tvc::params::measure_bits::loadcell_hx_scale_counts_per_n);
-    TEST_ASSERT_EQUAL_INT(14, tvc::params::measure_bits::power_batt_adc_to_mv);
+    TEST_ASSERT_EQUAL_INT(15, tvc::params::measure_bits::loadcell_hx_scale_counts_per_n);
+    TEST_ASSERT_EQUAL_INT(20, tvc::params::measure_bits::power_batt_adc_to_mv);
 }
 
 int main(int argc, char **argv) {

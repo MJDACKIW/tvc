@@ -34,7 +34,7 @@ def main():
     core = REPO_ROOT / "core"
     sources = [REPO_ROOT / "tools" / "synth_sd_log.cpp",
                REPO_ROOT / "firmware" / "src" / "flight" / "profiles.cpp",
-               *(core / name for name in ("kalman1d.cpp", "pid.cpp", "rate_limiter.cpp",
+               *(core / name for name in ("kalman2d.cpp", "pid.cpp", "servo.cpp",
                                           "controller.cpp"))]
     with tempfile.TemporaryDirectory() as tmp:
         exe = Path(tmp) / "synth_sd_log"

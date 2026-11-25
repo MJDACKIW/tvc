@@ -47,11 +47,14 @@ static_assert(sizeof(LogHeader) == 105, "LogHeader drifted from logging_sd.cpp")
 namespace {
 
 // Placeholders for params.yaml MEASURE values, synthetic file only. Kp/Kd are the paper
-// simulation's (simulation/config.py KP, KD); q/r and the servo scale are picked for this file.
+// simulation's (simulation/config.py KP, KD); the Kalman q/r, the servo lag and the servo
+// scale are picked for this file. kSynthTauS matches the made-up plant's own lag below.
 constexpr float kSynthKp = 8.5f;
 constexpr float kSynthKd = 1.2f;
-constexpr float kSynthQ = 0.005f;
+constexpr float kSynthQAngle = 0.005f;
+constexpr float kSynthQRate = 0.003f;
 constexpr float kSynthR = 0.5f;
+constexpr float kSynthTauS = 0.03f;
 constexpr float kSynthUsPerDeg = 10.0f;
 constexpr float kSynthNeutralUs = 1500.0f;
 
@@ -141,9 +144,12 @@ int main(int argc, char** argv) {
 
     const ControlParams cp{1.0f / params::control::rate_hz, kSynthKp, params::control::ki, kSynthKd,
                            params::control::integral_clamp_deg_s, params::control::max_deflection_deg,
-                           kSynthQ, kSynthR, params::servo::slew_deg_per_s};
-    AxisState ax_p{}, ax_y{};
-    ax_p.P = ax_y.P = params::kalman::p0;
+                           kSynthQAngle, kSynthQRate, kSynthR, params::servo::slew_deg_per_s,
+                           kSynthTauS};
+    // Same initialiser the sim and the Teensy use, so the shadow filter starts identically.
+    AxisState ax_p, ax_y;
+    controller_init(ax_p, params::kalman::p0_angle, params::kalman::p0_bias);
+    controller_init(ax_y, params::kalman::p0_angle, params::kalman::p0_bias);
     AxisOut sh_p{}, sh_y{};
 
     State state = State::kIdle;

@@ -138,10 +138,11 @@ void enter(State s) {
 }
 
 // STAND_OPEN's own required-MEASURE set: only what this mode actually needs to operate
-// correctly, the servo calibration to move to a real angle. kp/kd/kalman.q/r are deliberately
-// excluded: STAND_OPEN never closes the loop, and gating a plant-ID run on the very numbers that
-// run is meant to help derive would be circular. The load-cell scale is not in the set either:
-// the load cell was dropped from this build, and a stand without one can still be armed.
+// correctly, the servo calibration to move to a real angle. kp/kd/kalman.q_angle/q_rate/r and
+// servo.tau_s are deliberately excluded: STAND_OPEN never closes the loop, and gating a
+// plant-ID run on the very numbers that run is meant to help derive would be circular. The
+// load-cell scale is not in the set either: the load cell was dropped from this build, and a
+// stand without one can still be armed.
 bool measureGateOk(bool print_missing) {
     struct Item { const char* name; float value; };
     const Item items[] = {

@@ -9,21 +9,21 @@ into a C++ header included by firmware/test/test_parity, then runs the SAME trac
   (b) `pio test -e native -f test_parity`, which prints controller_step's outputs as CSV
 and asserts the x_hat and u_cmd sequences are bitwise equal.
 
-The fixture header is gitignored, not committed: it embeds floats formatted by whichever
-machine ran this, so a tracked copy shows as a diff after every run on a different machine.
-firmware/pio_pregen_params.py regenerates it (--fixture-only) before every pio build, and
-this script regenerates it again before every parity run.
+The fixture header is gitignored, not committed: firmware/pio_pregen_params.py regenerates it (via
+--fixture-only, below) before every `pio test`, and this script regenerates it again before
+every parity run, so it is always fresh and never shows up as a diff after a Mac run.
 """
 import argparse
-import ctypes
 import math
-import platform
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "sim"))
+import tvc_core  # noqa: E402  (path must be set up before this import)
+
 CORE_DIR = REPO_ROOT / "core"
 FIRMWARE_DIR = REPO_ROOT / "firmware"
 FIXTURE_PATH = FIRMWARE_DIR / "test" / "test_parity" / "parity_fixture.h"
@@ -33,7 +33,7 @@ TRACE_LEN = 450  # 3 s @ 150 Hz
 DT = 1.0 / 150.0
 
 # Fixture-only control params: fast/obvious behavior for a determinism check, not the
-# params.yaml flight values (kp, kd, q, r there are still MEASURE).
+# params.yaml flight values (kp, kd, q_angle, q_rate, r there are still MEASURE).
 FIXTURE_PARAMS = {
     "dt": DT,
     "kp": 4.0,
@@ -41,9 +41,13 @@ FIXTURE_PARAMS = {
     "kd": 0.5,
     "integral_clamp": 5.0,
     "max_deflection": 10.0,
-    "q": 0.02,
+    "q_angle": 0.02,
+    "q_rate": 0.05,
     "r": 0.4,
     "slew_deg_per_s": 500.0,
+    "tau_s": 0.03,
+    "p0_angle": 9.0,
+    "p0_bias": 0.04,
 }
 
 
@@ -83,63 +87,32 @@ def write_fixture_header(path, gyro, accel_tilt, gate, params):
         f"constexpr float kParityKd = {f32(params['kd'])};",
         f"constexpr float kParityIntegralClamp = {f32(params['integral_clamp'])};",
         f"constexpr float kParityMaxDeflection = {f32(params['max_deflection'])};",
-        f"constexpr float kParityQ = {f32(params['q'])};",
+        f"constexpr float kParityQAngle = {f32(params['q_angle'])};",
+        f"constexpr float kParityQRate = {f32(params['q_rate'])};",
         f"constexpr float kParityR = {f32(params['r'])};",
         f"constexpr float kParitySlewDegPerS = {f32(params['slew_deg_per_s'])};",
+        f"constexpr float kParityTauS = {f32(params['tau_s'])};",
+        f"constexpr float kParityP0Angle = {f32(params['p0_angle'])};",
+        f"constexpr float kParityP0Bias = {f32(params['p0_bias'])};",
         "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n")
 
 
-def native_lib_path():
-    name = "libtvccore.dylib" if platform.system() == "Darwin" else "libtvccore.so"
-    return CORE_DIR / name
-
-
 def run_ctypes_side(gyro, accel_tilt, gate, params):
-    subprocess.run(["make", "-C", str(CORE_DIR), "native"], check=True)
-
-    lib = ctypes.CDLL(str(native_lib_path()))
-    c_float_p = ctypes.POINTER(ctypes.c_float)
-    c_int_p = ctypes.POINTER(ctypes.c_int)
-    lib.tvc_controller_step.argtypes = [
-        c_float_p, c_float_p, c_float_p, c_float_p, c_float_p, c_int_p,
-        ctypes.c_float, ctypes.c_float, ctypes.c_int,
-        ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
-        ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
-        c_float_p, c_float_p, c_float_p, c_float_p, c_float_p, c_int_p,
-    ]
-    lib.tvc_controller_step.restype = None
-
-    x_hat = ctypes.c_float(0.0)
-    P = ctypes.c_float(0.0)
-    integral = ctypes.c_float(0.0)
-    e_prev = ctypes.c_float(0.0)
-    delta = ctypes.c_float(0.0)
-    saturated = ctypes.c_int(0)
-    out_x_hat = ctypes.c_float()
-    out_u_raw = ctypes.c_float()
-    out_u_cmd = ctypes.c_float()
-    out_delta = ctypes.c_float()
-    out_K = ctypes.c_float()
-    out_accel_used = ctypes.c_int()
-
+    tvc_core.build()
+    axis = tvc_core.ControllerAxis(
+        dt=params["dt"], kp=params["kp"], ki=params["ki"], kd=params["kd"],
+        integral_clamp=params["integral_clamp"], max_deflection=params["max_deflection"],
+        q_angle=params["q_angle"], q_rate=params["q_rate"], r=params["r"],
+        slew_deg_per_s=params["slew_deg_per_s"], tau_s=params["tau_s"],
+        p0_angle=params["p0_angle"], p0_bias=params["p0_bias"],
+    )
     results = []
     for i in range(len(gyro)):
-        lib.tvc_controller_step(
-            ctypes.byref(x_hat), ctypes.byref(P), ctypes.byref(integral),
-            ctypes.byref(e_prev), ctypes.byref(delta), ctypes.byref(saturated),
-            ctypes.c_float(gyro[i]), ctypes.c_float(accel_tilt[i]), int(gate[i]),
-            ctypes.c_float(params["dt"]), ctypes.c_float(params["kp"]),
-            ctypes.c_float(params["ki"]), ctypes.c_float(params["kd"]),
-            ctypes.c_float(params["integral_clamp"]), ctypes.c_float(params["max_deflection"]),
-            ctypes.c_float(params["q"]), ctypes.c_float(params["r"]),
-            ctypes.c_float(params["slew_deg_per_s"]),
-            ctypes.byref(out_x_hat), ctypes.byref(out_u_raw), ctypes.byref(out_u_cmd),
-            ctypes.byref(out_delta), ctypes.byref(out_K), ctypes.byref(out_accel_used),
-        )
-        results.append((out_x_hat.value, out_u_cmd.value))
+        out = axis.step(gyro[i], accel_tilt[i], gate[i])
+        results.append((out["x_hat"], out["u_cmd"]))
     return results
 
 
@@ -174,14 +147,16 @@ def main():
     parser.add_argument(
         "--fixture-only",
         action="store_true",
-        help="Only (re)write the gitignored parity fixture header, then exit. Used by "
-        "firmware/pio_pregen_params.py so `pio test -e native` always has a fresh one.",
+        help="Only (re)write the gitignored parity fixture header, then exit. "
+        "Used by firmware/pio_pregen_params.py so `pio test -e native` always has a fresh one.",
     )
     args = parser.parse_args()
 
     gyro, accel_tilt, gate = generate_trace()
     write_fixture_header(FIXTURE_PATH, gyro, accel_tilt, gate, FIXTURE_PARAMS)
+
     if args.fixture_only:
+        print(f"parity_test.py: wrote {FIXTURE_PATH.relative_to(REPO_ROOT)}")
         return
 
     ctypes_results = run_ctypes_side(gyro, accel_tilt, gate, FIXTURE_PARAMS)

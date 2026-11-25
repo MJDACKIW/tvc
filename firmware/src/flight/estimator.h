@@ -8,9 +8,9 @@
 // module's u_cmd, drives the servos. This still runs every control tick so the Kalman
 // estimate (x_hat, K, accel_used) is real, logged data from the first bench run, per the task
 // brief -- u_raw/u_cmd/delta here are "what closed-loop would have commanded" shadow
-// diagnostics, not applied to hardware. kp/kd/kalman.q/r are MEASURE (NaN) until the stand
-// tuning pass in a later phase, so expect NaN in those columns until then; that is correct,
-// not a bug (SPEC.md/CLAUDE.md: never invent calibration constants).
+// diagnostics, not applied to hardware. kp/kd/kalman.q_angle/q_rate/r and servo.tau_s are
+// MEASURE (NaN) until the stand tuning pass in a later phase, so expect NaN in those columns
+// until then; that is correct, not a bug (SPEC.md/CLAUDE.md: never invent calibration constants).
 namespace tvc::flight::estimator {
 
 struct ShadowOut {
@@ -22,7 +22,7 @@ struct ShadowOut {
     bool accel_used;
 };
 
-void init();  // zeroes both axes' state, P = params::kalman::p0
+void init();  // controller_init on both axes: zero state, P0 = diag(p0_angle, p0_bias)
 
 ShadowOut stepPitch(float gyro_deg_s, float accel_tilt_deg, bool accel_gate_ok);
 ShadowOut stepYaw(float gyro_deg_s, float accel_tilt_deg, bool accel_gate_ok);

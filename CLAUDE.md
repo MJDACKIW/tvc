@@ -52,9 +52,39 @@ read-only reference.
 
 ## Current phase
 
-Phase 1 (SPEC.md Section 9): repo scaffold, `params.yaml`, `core/`, native unit tests, and
-`parity_test.py`. Phases 2-7 (simulation, vehicle firmware, radio, ground GUI, HIL, flight
-mode) are not started. Do not jump ahead of the current phase without being asked.
+Phase 1 (core/, native tests, parity) is complete. Phase 2 (`sim/`) is substantially
+built: `run_sim.py`'s free-flight scenarios (baseline, open_loop, disturbance,
+controllability_map, monte_carlo), `--legacy-physics` regression mode, and a
+`diagnose_estimator` scenario. Ahead of the strict phase order (SPEC.md Section 9 lists
+these under Phase 6), the static-stand path also exists: `run_sim.py --stand`
+(`StandVehicle`, no aero, mechanical friction), `--thrust-from-log`/`--theta0-from-log`
+to drive it from a decoded log, and `tools/iae_compare.py` (Section 7) with a
+`--self-test` mode that proves the pipeline against a synthetic log before real stand
+data exists. `core/`'s servo model now includes a first-order lag (`servo.tau_s`)
+alongside the slew limit, shared by both vehicle models and the stand.
+
+Current priority: the sim exists primarily to support the static-stand delta-IAE study
+(measured vs. simulated attitude response, `tools/iae_compare.py`), not free-flight
+physics; the free-flight model (`Vehicle`, `controllability_map`, `monte_carlo`) is kept
+for the paper but is not the active focus. Phases 3-5 and 7 (vehicle firmware, radio,
+ground GUI, flight mode) are not started; do not jump ahead of what's been explicitly
+asked.
+
+Resolved: the baseline scenario's failure to settle within the standard 5% band was
+root-caused (see `run_sim.py diagnose_estimator`) to the Kalman filter's P0
+initialization giving the bias state as much initial uncertainty as the angle state,
+letting the first accelerometer correction after ignition misattribute part of a large
+initial-angle error to `bias_hat`. Fixed via `core/controller.h`'s `controller_init`
+(asymmetric P0: `kalman.p0_angle`/`p0_bias` in params.yaml, small for bias, large for
+angle), the one place both sim and firmware now seed `AxisState`. Verified: the
+baseline's steady-state drift dropped from ~2.9 deg to ~0.5 deg (matching the
+bias-frozen diagnostic variant almost exactly); the remaining ~0.5 deg is gyro white
+noise integrated over the long predict-only stretch while the accelerometer gate is
+closed, which is intrinsic to gyro-only dead reckoning and not fixable by
+initialization. `--legacy-physics` keeps the paper's original symmetric P0 = I
+(`sim_overrides.legacy_physics.p0_angle`/`p0_bias`, both 1.0) since its own gate never
+closes for an extended stretch and was never exposed to this failure mode; `legacy_check`
+still passes at the same <1% (in fact unchanged: 0.22%/0.20%/0.22%).
 
 ## Style notes
 - No em dashes in any generated text (paper, comments, docs): flagged as AI-sounding in prior essay reviews.
