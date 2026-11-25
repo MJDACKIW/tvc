@@ -22,8 +22,7 @@ Section 7's iae_compare.py companion study): v = 0 always, so there is no aero a
 `ThrustLog`, `load_stand_log`, and the ignition/theta0 helpers below support run_sim.py's
 --thrust-from-log and --theta0-from-log, which drive a stand run from a decoded log
 instead of the NAR thrust curve and the usual theta0=5 deg default; see their docstrings
-for the log .npz schema (decode_log.py does not exist yet, so this is the schema it will
-need to produce, not one it already does).
+for the log .npz schema (tools/decode_log.py --npz writes it).
 """
 import math
 from pathlib import Path
@@ -315,9 +314,10 @@ class StandVehicle:
 
 # ---------------------------------------------------------------------------
 # Decoded stand-fire log ingestion, for run_sim.py --thrust-from-log/--theta0-from-log
-# and tools/iae_compare.py. tools/decode_log.py does not exist yet (Phase 7); this
-# defines the .npz schema it will need to produce, not one it already does. Fields, one
-# array per key except params_hash, all sharing the same time base except params_hash:
+# and tools/iae_compare.py. This is the .npz schema tools/decode_log.py's to_npz writes
+# (it also writes pyro_on_time_s and burn_start_time_s, which nothing here reads yet).
+# Fields, one array per key except params_hash, all sharing the same time base except
+# params_hash:
 #   time_s:            log timestamps, s (t=0 at some fixed reference, not ignition)
 #   thrust_n:           measured/estimated thrust, N (0 before ignition)
 #   encoder_angle_deg:  stand encoder tilt angle, deg

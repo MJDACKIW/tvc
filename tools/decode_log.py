@@ -6,7 +6,10 @@ legacy static_fire.cpp's smaller, header-less Record; this one understands the S
 Section 4.6 LogHeader + Record layout used by env:teensy_flight.
 
     python decode_log.py SF_000.BIN
-    python decode_log.py SF_000.BIN --csv out.csv --npz out.npz
+    python decode_log.py SF_000.BIN --csv out.csv --npz out.npz [--axis pitch|yaw]
+
+The .npz carries the schema sim/vehicle.py's load_stand_log reads (see to_npz), so a decoded
+stand log goes straight into tools/iae_compare.py and `run_sim.py --stand --thrust-from-log`.
 
 Record/LogHeader layout must match firmware/src/flight/{record.h,logging_sd.cpp} exactly. If
 the header magic doesn't match, or the file size (minus header) doesn't divide evenly by
@@ -187,9 +190,9 @@ def summarize(header, r, crc_fail):
         print(f"gimbal yaw   : {np.nanmin(r['delta_y'][burn]):+.2f} .. "
               f"{np.nanmax(r['delta_y'][burn]):+.2f} deg (applied, open-loop)")
     if np.all(np.isnan(r["xhat_p"])):
-        print("note         : xhat_p/xhat_y are all NaN -- kalman.q/kalman.r are still MEASURE "
-              "in params.yaml (expected until the stand tuning pass); the attitude plot falls "
-              "back to a raw accelerometer-only reference angle.")
+        print("note         : xhat_p/xhat_y are all NaN -- kalman.q_angle/q_rate/r are still "
+              "MEASURE in params.yaml (expected until the stand tuning pass); the attitude "
+              "plot falls back to a raw accelerometer-only reference angle.")
     return t
 
 
@@ -213,11 +216,51 @@ def to_csv(path, r, t):
     print(f"wrote {path}")
 
 
-def to_npz(path, header, r, t):
-    np.savez(path, t=t, **{name: r[name] for name in r.dtype.names}, **{
-        f"header_{k}": v for k, v in header.items()
-    })
-    print(f"wrote {path}")
+# Which Record fields feed one axis of the stand-log schema. Pitch is gyro X / encoder 1,
+# yaw is gyro Y / encoder 2, the same pairing estimator.cpp and sequencer.cpp use.
+AXIS_FIELDS = {
+    "pitch": {"gyro": "gx", "encoder": "enc_p", "gimbal": "delta_p"},
+    "yaw": {"gyro": "gy", "encoder": "enc_y", "gimbal": "delta_y"},
+}
+
+
+def to_npz(path, header, r, t, axis="pitch"):
+    """Writes every Record field (as decoded) and the header fields, plus the keys
+    sim/vehicle.py's load_stand_log reads for ONE axis, so the file feeds tools/iae_compare.py
+    and run_sim.py --thrust-from-log directly:
+
+      time_s             seconds since the first record (not since ignition)
+      thrust_n           logged thrust, N (NaN while loadcell.hx_scale_counts_per_n is MEASURE)
+      encoder_angle_deg  the axis' AS5600 encoder, deg from its neutral. This is the MEASURED
+                         theta. It is never the Kalman estimate: xhat is the filter's belief,
+                         and comparing a model against its own estimator proves nothing.
+      gyro_dps           the axis' gyro, deg/s
+      gimbal_actual_deg  delta_p / delta_y, the gimbal command the firmware applied
+      params_hash        full params.yaml SHA-256 the firmware logged against
+      axis               "pitch" or "yaw", which axis the keys above are for
+      pyro_on_time_s     time_s of the first record with the pyro gate high; NaN if never.
+                         Available on every log, because it is the firmware's own output.
+      burn_start_time_s  NaN. Reserved for the moment the motor actually lights, which will
+                         come from the phototransistor once it is fitted. Until then nothing
+                         can write it; without a load cell there is no thrust rise to find
+                         ignition from either, so iae_compare cannot align such a log yet.
+    """
+    f = AXIS_FIELDS[axis]
+    pyro_high = np.nonzero(r["pyro"])[0]
+    np.savez(
+        path, t=t, **{name: r[name] for name in r.dtype.names},
+        **{f"header_{k}": v for k, v in header.items()},
+        time_s=t,
+        thrust_n=r["thrust_N"].astype(np.float64),
+        encoder_angle_deg=r[f["encoder"]].astype(np.float64),
+        gyro_dps=r[f["gyro"]].astype(np.float64) / GYRO_LSB_PER_DPS,
+        gimbal_actual_deg=r[f["gimbal"]].astype(np.float64),
+        params_hash=np.str_(header["params_hash"]),
+        axis=np.str_(axis),
+        pyro_on_time_s=np.float64(t[pyro_high[0]] if len(pyro_high) else np.nan),
+        burn_start_time_s=np.float64(np.nan),
+    )
+    print(f"wrote {path} ({axis} axis)")
 
 
 def plot(header, r, t):
@@ -283,7 +326,9 @@ def main():
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("path")
     ap.add_argument("--csv", help="also write a CSV copy")
-    ap.add_argument("--npz", help="also write an .npz copy")
+    ap.add_argument("--npz", help="also write an .npz copy (the load_stand_log schema)")
+    ap.add_argument("--axis", choices=sorted(AXIS_FIELDS), default="pitch",
+                    help="which axis the .npz stand-log keys describe (default pitch)")
     ap.add_argument("--no-plot", action="store_true")
     args = ap.parse_args()
 
@@ -298,7 +343,7 @@ def main():
     if args.csv:
         to_csv(args.csv, r, t)
     if args.npz:
-        to_npz(args.npz, header, r, t)
+        to_npz(args.npz, header, r, t, args.axis)
     if not args.no_plot:
         plot(header, r, t)
 

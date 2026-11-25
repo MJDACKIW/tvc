@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Compares a measured static-fire stand log against the matching sim prediction. See
 SPEC.md Section 7. sim/vehicle.py's load_stand_log docstring has the decoded-log .npz
-schema (tools/decode_log.py does not exist yet, so this is the schema it will need to
-produce, not one it already does).
+schema; tools/decode_log.py writes it (`decode_log.py SF_000.BIN --npz out.npz [--axis yaw]`).
 
 Runs sim/run_sim.py's --stand baseline scenario with thrust taken from the SAME log
 (--thrust-from-log's mechanism), so the sim prediction uses the exact measured thrust
