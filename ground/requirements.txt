@@ -1,4 +1,8 @@
-# Ground station (gs.py), sim/run_sim.py --serve, and their tests. Python 3.11+.
+# The one requirements file for the project venv: the ground station (gs.py), the simulation
+# (sim/run_sim.py scenarios and --serve), tools/ (gen_params, decode_log, iae_compare,
+# synth_sd_log, telem_cli) and all of their tests. Python 3.11+.
+# Install wheels only (pip install --only-binary=:all: -r ground/requirements.txt): nothing
+# here should ever be built from source.
 # Put the venv at ground/venv, not ground/.venv: see _qt_env.py (hidden-flag issue).
 PyQt6>=6.6
 pyqtgraph>=0.13
@@ -6,3 +10,4 @@ numpy>=1.26
 pyserial>=3.5
 pyyaml>=6.0
 pytest>=8
+matplotlib>=3.9      # sim/run_sim.py figures, tools/iae_compare.py, tools/decode_log.py plot

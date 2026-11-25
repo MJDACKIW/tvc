@@ -1,2 +1,2 @@
-pyyaml
-pyserial
+# tools/ shares the project venv; see ground/requirements.txt (the single source).
+-r ../ground/requirements.txt
